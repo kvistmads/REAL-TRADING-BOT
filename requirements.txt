@@ -1,3 +1,6 @@
+# Python 3.12 required (3.13+ ikke understøttet af cryptography/numba endnu)
+# Installér med binære wheels — cryptography bygger ellers fra kilde og fejler:
+#   pip install --only-binary=:all: -r requirements.txt
 ccxt>=4.3.0
 pandas>=2.0.0
 numpy>=1.24.0
