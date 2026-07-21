@@ -8,5 +8,11 @@ SQLAlchemy>=2.0.0
 aiosqlite>=0.19.0
 PyYAML>=6.0
 python-dotenv>=1.0.0
+aiohttp>=3.9.0
 pytest>=7.4.0
 pytest-asyncio>=0.23.0
+
+# MetaTrader5 er Windows-only og har ingen wheel til macOS/Linux.
+# Installeres separat på Windows-terminalen; koden fejler gracefully hvis den mangler:
+#   pip install MetaTrader5
+# MetaTrader5>=5.0.45  ; sys_platform == "win32"
