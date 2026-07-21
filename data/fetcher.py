@@ -7,6 +7,7 @@ from datetime import datetime
 import pandas as pd
 
 from core.exchange import ExchangeClient
+from data.mt5_fetcher import MT5Fetcher
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +20,13 @@ _TIMEFRAME_SECONDS = {
 class DataFetcher:
     def __init__(self, exchange: ExchangeClient, config: dict):
         self.exchange = exchange
+        self.config = config
         self._cache: dict[str, tuple[pd.DataFrame, datetime]] = {}
+        self.mt5 = MT5Fetcher()
+        # Forsøg at åbne MT5-forbindelsen ved start; fejler gracefully på Mac/Linux.
+        self.mt5_available = self.mt5.initialize()
 
-    async def get_ohlcv(self, symbol: str, timeframe: str, limit: int = 500) -> pd.DataFrame:
+    async def get_ohlcv(self, symbol: str, timeframe: str, limit: int = 500) -> pd.DataFrame | None:
         key = f"{symbol}:{timeframe}"
         cached_df, cached_at = self._cache.get(key, (None, None))
 
@@ -31,10 +36,29 @@ class DataFetcher:
             if age < tf_secs:
                 return cached_df
 
-        df = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        # Forex/gold hentes fra MT5; crypto fra ccxt-børsen (som før).
+        if MT5Fetcher.is_forex(symbol):
+            if not self.mt5_available:
+                logger.warning(f"MT5 utilgængelig — skipper {symbol} for denne tick")
+                return None
+            df = self.mt5.get_ohlcv(symbol, timeframe, limit)
+            if df is None:
+                return None
+        else:
+            df = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+
         self._cache[key] = (df, datetime.utcnow())
         logger.debug(f"Hentet {len(df)} bars for {symbol} {timeframe}")
         return df
+
+    def get_tick_price(self, symbol: str) -> float | None:
+        """Aktuel pris for forex/gold via MT5. Returnerer None hvis utilgængelig."""
+        if MT5Fetcher.is_forex(symbol) and self.mt5_available:
+            return self.mt5.get_tick_price(symbol)
+        return None
+
+    def shutdown(self) -> None:
+        self.mt5.shutdown()
 
     async def get_multi(self, symbols: list[str], timeframe: str) -> dict[str, pd.DataFrame]:
         tasks = {s: self.get_ohlcv(s, timeframe) for s in symbols}

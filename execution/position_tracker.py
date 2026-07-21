@@ -37,6 +37,7 @@ class PositionTracker:
         order_result: dict,
         current_price: float,
         gate_scores: dict,
+        market_regime: str | None = None,
     ) -> Trade:
         stake = self.config["trading"]["stake_amount"]
         quantity = stake / current_price
@@ -58,7 +59,7 @@ class PositionTracker:
             exit_time=None,
             status="open",
             gate_scores=gate_scores,
-            market_regime=None,
+            market_regime=market_regime,
             signal_data=signal.metadata,
             dry_run=self.config["trading"]["dry_run"],
         )

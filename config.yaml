@@ -22,6 +22,7 @@ timeframes:
   entry: "1h"
 
 strategies:
+  # ema_crossover + sr_breakout udskudt til efter MT5-backtest af egne strategier
   enabled: [rsi_divergence, macd_volume, bollinger_squeeze]
   min_confidence: 0.60
 
@@ -33,8 +34,19 @@ gates:
     max_position_pct: 5.0
     max_daily_loss_pct: 3.0
     blocking: true
+  regime:
+    enabled: true
+    blocking: true
+    min_trending_adx: 25
+    max_volatile_atr_pct: 4.0
+    volatile_min_confidence: 0.75
 
 risk_defaults:
   crypto:   {sl_pct: 10.0, tp_pct: 20.0}
   forex:    {sl_pct: 1.5,  tp_pct: 3.0}
   gold:     {sl_pct: 3.0,  tp_pct: 6.0}
+
+notifications:
+  telegram:
+    enabled: false          # Sæt til true når TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID er i .env
+    daily_summary_time: "22:00"

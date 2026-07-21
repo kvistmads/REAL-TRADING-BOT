@@ -5,12 +5,16 @@ import logging
 import uuid
 from datetime import datetime
 
+from analytics.performance import PerformanceTracker
 from core.database import SignalLog, async_session_maker, init_db
 from core.exchange import ExchangeClient
+from core.notifications import TelegramNotifier
 from data.fetcher import DataFetcher
 from data.indicators import add_all
+from data.mt5_fetcher import MT5Fetcher
 from execution.position_tracker import PositionTracker
 from gates.base import GateResult
+from gates.regime import RegimeGate
 from gates.risk import RiskGate
 from strategies.base import BaseStrategy, Signal
 from strategies.registry import load_strategies
@@ -29,9 +33,22 @@ class TradingEngine:
         self.exchange: ExchangeClient | None = None
         self.fetcher: DataFetcher | None = None
         self.position_tracker: PositionTracker | None = None
+        self.notifier: TelegramNotifier | None = None
+        self.performance = PerformanceTracker()
         self.strategies: list[BaseStrategy] = []
         self.gates: list = []
         self._running = False
+        self._last_summary_date = None
+        self._summary_hour = self._parse_summary_hour()
+
+    def _parse_summary_hour(self) -> int:
+        raw = self.config.get("notifications", {}).get("telegram", {}).get(
+            "daily_summary_time", "22:00"
+        )
+        try:
+            return int(str(raw).split(":")[0])
+        except (ValueError, IndexError):
+            return 22
 
     async def start(self) -> None:
         await self._initialize()
@@ -49,6 +66,7 @@ class TradingEngine:
         self.exchange = ExchangeClient(self.config)
         self.fetcher = DataFetcher(self.exchange, self.config)
         self.position_tracker = PositionTracker(self.config)
+        self.notifier = TelegramNotifier(self.config)
         await self.position_tracker.load_open_positions()
 
         registry = load_strategies()
@@ -58,6 +76,9 @@ class TradingEngine:
 
         if self.config["gates"]["risk"]["enabled"]:
             self.gates.append(RiskGate(self.config))
+        if self.config["gates"].get("regime", {}).get("enabled"):
+            self.gates.append(RegimeGate(self.config))
+        logger.info(f"Gates aktive: {[g.name for g in self.gates]}")
 
     async def _tick(self) -> None:
         primary_tf = self.config["timeframes"]["primary"]
@@ -67,6 +88,11 @@ class TradingEngine:
         current_prices: dict[str, float] = {}
         for symbol in symbols:
             try:
+                if MT5Fetcher.is_forex(symbol):
+                    price = self.fetcher.get_tick_price(symbol)
+                    if price is not None:
+                        current_prices[symbol] = price
+                    continue
                 ticker = await self.exchange.fetch_ticker(symbol)
                 current_prices[symbol] = ticker["last"]
             except Exception as e:
@@ -74,6 +100,8 @@ class TradingEngine:
 
         if current_prices:
             closed = await self.position_tracker.check_sl_tp(current_prices)
+            for trade in closed:
+                await self.notifier.send_trade_closed(trade, self._exit_reason(trade))
             if closed:
                 logger.info(f"{len(closed)} positioner lukket via SL/TP")
 
@@ -115,6 +143,7 @@ class TradingEngine:
                     "daily_pnl": self.position_tracker.get_daily_pnl(),
                     "account_balance": self.config["trading"]["total_capital"],
                     "asset_class": BaseStrategy.get_asset_class(symbol),
+                    "df": df,
                     "config": self.config,
                 }
 
@@ -131,6 +160,7 @@ class TradingEngine:
                     if not result.passed and gate.blocking:
                         gate_passed = False
                         logger.info(f"Gate '{gate.name}' afviste signal: {result.reason}")
+                        await self.notifier.send_gate_rejected(signal, result)
                         break
 
                 await self._log_signal(signal, gate_passed, None)
@@ -145,9 +175,13 @@ class TradingEngine:
                     self.config["trading"]["stake_amount"] / current_price,
                     sl_price, tp_price)
 
-                await self.position_tracker.open_position(
-                    signal, sl_price, tp_price, order, current_price, gate_scores
+                trade = await self.position_tracker.open_position(
+                    signal, sl_price, tp_price, order, current_price, gate_scores,
+                    market_regime=context.get("regime"),
                 )
+                await self.notifier.send_trade_opened(trade, signal.confidence)
+
+        await self._maybe_daily_summary()
 
     async def _log_signal(self, signal: Signal, gate_passed: bool, trade_id: str | None) -> None:
         log = SignalLog(
@@ -190,7 +224,37 @@ class TradingEngine:
         primary_tf = self.config["timeframes"]["primary"]
         return _TIMEFRAME_SECONDS.get(primary_tf, 14400)
 
+    @staticmethod
+    def _exit_reason(trade) -> str:
+        """Udled om en lukket trade ramte TP eller SL ud fra exit-prisen."""
+        if trade.exit_price is None:
+            return "closed"
+        tp_hit = (trade.side == "long" and trade.exit_price >= trade.tp_price) or (
+            trade.side == "short" and trade.exit_price <= trade.tp_price
+        )
+        return "TP hit" if tp_hit else "SL hit"
+
+    async def _maybe_daily_summary(self) -> None:
+        now = datetime.now()
+        if self._last_summary_date == now.date() or now.hour < self._summary_hour:
+            return
+        self._last_summary_date = now.date()
+        await self.run_daily_summary()
+
+    async def run_daily_summary(self) -> None:
+        """Gem dagligt performance-snapshot og send Telegram-summary. Kan trigges manuelt til test."""
+        try:
+            async with async_session_maker() as session:
+                await self.performance.record_daily_snapshot(session)
+                stats = await self.performance.get_summary(session, days=1)
+            await self.notifier.send_daily_summary(stats)
+            logger.info("Daglig summary sendt")
+        except Exception as e:
+            logger.error(f"Fejl i daglig summary: {e}", exc_info=True)
+
     async def stop(self) -> None:
         self._running = False
+        if self.fetcher:
+            self.fetcher.shutdown()
         if self.exchange:
             await self.exchange.close()
