@@ -1,0 +1,40 @@
+exchange:
+  name: binance
+  sandbox: true
+
+trading:
+  dry_run: true
+  total_capital: 100
+  stake_amount: 5
+  max_open_trades: 4
+  leverage: 1
+
+symbols:
+  - BTC/USDT
+  - ETH/USDT
+  - SOL/USDT
+  - EUR/USD
+  - GBP/USD
+  - XAU/USD
+
+timeframes:
+  primary: "4h"
+  entry: "1h"
+
+strategies:
+  enabled: [rsi_divergence, macd_volume, bollinger_squeeze]
+  min_confidence: 0.60
+
+gates:
+  confluence:
+    enabled: false
+  risk:
+    enabled: true
+    max_position_pct: 5.0
+    max_daily_loss_pct: 3.0
+    blocking: true
+
+risk_defaults:
+  crypto:   {sl_pct: 10.0, tp_pct: 20.0}
+  forex:    {sl_pct: 1.5,  tp_pct: 3.0}
+  gold:     {sl_pct: 3.0,  tp_pct: 6.0}
