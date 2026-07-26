@@ -22,9 +22,11 @@ timeframes:
   entry: "1h"
 
 strategies:
-  # ema_crossover + sr_breakout udskudt til efter MT5-backtest af egne strategier
-  enabled: [rsi_divergence, macd_volume, bollinger_squeeze]
-  min_confidence: 0.60
+  enabled:
+    - trend_momentum
+    - reversal_context
+    - volatility_breakout
+  min_confidence: 0.65
 
 gates:
   confluence:
