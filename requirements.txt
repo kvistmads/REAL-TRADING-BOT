@@ -12,6 +12,16 @@ aiohttp>=3.9.0
 pytest>=7.4.0
 pytest-asyncio>=0.23.0
 
+# Backtest-datakilder: Binance (ccxt, ovenfor) til crypto, yfinance til forex/gold.
+yfinance>=0.2.40
+
+# pandas-ta er BEVIDST udeladt. På dette miljø (numpy 2.5 / pandas 3.0) kan den ikke køre:
+#   - pandas-ta>=0.3.14b resolver til 0.4.71b0, som kræver numba → numba tvinger numpy<2.4 (nedgradering).
+#   - Den ældre 0.3.14b0 gør `from numpy import NaN`, som blev fjernet i numpy 2.0 → importerer ikke.
+# Indikatorerne (EMA/MACD/RSI/ATR/Bollinger/volume) er derfor implementeret i ren pandas/numpy
+# i data/indicators.py — matematisk identiske og med samme kolonnenavne som pandas-ta.
+# pandas-ta>=0.3.14b
+
 # MetaTrader5 er Windows-only og har ingen wheel til macOS/Linux.
 # Installeres separat på Windows-terminalen; koden fejler gracefully hvis den mangler:
 #   pip install MetaTrader5
