@@ -33,10 +33,21 @@ class VolatilityBreakout(BaseStrategy):
     SQUEEZE_LOOKBACK = 5
     SR_LOOKBACK = 50
     SWING_WINDOW = 5
-    VOLUME_MULTIPLIER = 1.5
     SR_MAX_ATR = 1.5
+    # Overrideable via params (A/B): gate-tærskel på volume-spike, hvilken
+    # percentil der definerer et squeeze, og confidence-gulv. Defaults = uændret
+    # Phase 3-adfærd.
+    MIN_VOLUME_RATIO = 1.5
+    SQUEEZE_PERCENTILE = 10
 
-    def generate_signal(self, df: pd.DataFrame, symbol: str) -> Signal | None:
+    def generate_signal(
+        self, df: pd.DataFrame, symbol: str, params: dict | None = None
+    ) -> Signal | None:
+        p = params or {}
+        min_volume_ratio = p.get("min_volume_ratio", self.MIN_VOLUME_RATIO)
+        squeeze_pct = p.get("squeeze_percentile", self.SQUEEZE_PERCENTILE)
+        min_conf = p.get("min_confidence", self.min_confidence)
+
         if len(df) < self.MIN_BARS:
             return None
 
@@ -50,7 +61,7 @@ class VolatilityBreakout(BaseStrategy):
         if len(window120) < 20:
             return None
 
-        p10 = float(np.percentile(window120, 10))
+        p10 = float(np.percentile(window120, squeeze_pct))
         p90 = float(np.percentile(window120, 90))
 
         # Squeeze skal have været aktiv (bb_width <= p10) inden for seneste 5 barer.
@@ -92,7 +103,7 @@ class VolatilityBreakout(BaseStrategy):
             return None
 
         # Hårde gates: volume + MACD-retning.
-        if volume <= self.VOLUME_MULTIPLIER * volume_ma_20:
+        if volume <= min_volume_ratio * volume_ma_20:
             return None
         if side == "long" and not (macd_hist > 0):
             return None
@@ -109,7 +120,7 @@ class VolatilityBreakout(BaseStrategy):
             0.0,
             1.0,
         )
-        if confidence < self.min_confidence:
+        if confidence < min_conf:
             return None
 
         # Measured-move target ud fra prior range.

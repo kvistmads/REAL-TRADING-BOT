@@ -56,6 +56,10 @@ class Trade(Base):
     market_regime: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     signal_data: Mapped[Any] = mapped_column(JSON, nullable=False, default=dict)
     dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # A/B-arm trade'en blev tildelt: "A" (kontrol) | "B" (kandidat) | None (intet
+    # aktivt experiment). Udfyldes af execution/ab_router når et eksperiment kører.
+    # create_all tilføjer kolonnen additivt — ingen migration nødvendig.
+    ab_arm: Mapped[Optional[str]] = mapped_column(String, nullable=True, default=None)
 
 
 class SignalLog(Base):
@@ -136,15 +140,34 @@ class ABExperiment(Base):
     min_trades_per_arm: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
 
 
+def _apply_additive_migrations(conn) -> None:
+    """Tilføj nye kolonner som create_all ikke håndterer på eksisterende tabeller.
+
+    create_all opretter kun MANGLENDE tabeller — den tilføjer aldrig en ny kolonne
+    til en tabel der allerede findes. Denne guardede ALTER er idempotent (tjekker
+    PRAGMA først), additiv og datatabs-fri; ingen Alembic i projektet. Kaldes efter
+    create_all: hvis tabellen lige er oprettet, har den allerede kolonnen (no-op);
+    findes den fra før uden kolonnen, tilføjes den her.
+    """
+    existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(trades)")}
+    if existing and "ab_arm" not in existing:
+        conn.exec_driver_sql("ALTER TABLE trades ADD COLUMN ab_arm VARCHAR")
+
+
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_apply_additive_migrations)
 
 
 def init_sync_db() -> None:
     """Opret alle tabeller (inkl. observations/ab_experiments) via den synkrone engine.
 
-    create_all er additivt: eksisterende tabeller røres ikke, kun manglende oprettes.
-    Bruges af reflection-loopsene, som ikke deler event-loop med engine.
+    create_all er additivt for tabeller: eksisterende tabeller røres ikke, kun
+    manglende oprettes. Nye kolonner på eksisterende tabeller tilføjes af
+    _apply_additive_migrations. Bruges af reflection-loopsene, som ikke deler
+    event-loop med engine.
     """
     Base.metadata.create_all(sync_engine)
+    with sync_engine.begin() as conn:
+        _apply_additive_migrations(conn)

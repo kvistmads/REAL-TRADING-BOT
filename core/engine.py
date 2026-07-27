@@ -6,12 +6,13 @@ import uuid
 from datetime import datetime
 
 from analytics.performance import PerformanceTracker
-from core.database import SignalLog, async_session_maker, init_db
+from core.database import SignalLog, async_session_maker, init_db, sync_session_maker
 from core.exchange import ExchangeClient
 from core.notifications import TelegramNotifier
 from data.fetcher import DataFetcher
 from data.indicators import add_all
 from data.mt5_fetcher import MT5Fetcher
+from execution.ab_router import get_assignment, record_trade_arm
 from execution.position_tracker import PositionTracker
 from gates.base import GateResult
 from gates.regime import RegimeGate
@@ -115,8 +116,12 @@ class TradingEngine:
             df = add_all(df)
 
             for strategy in self.strategies:
+                # A/B: kør signal på arm-tildelte params hvis et eksperiment er aktivt,
+                # ellers tom dict → strategiens defaults (assignment=None, ab_arm=None).
+                assignment = get_assignment(strategy.name)
+                params = assignment.params if assignment else {}
                 try:
-                    signal = strategy.generate_signal(df, symbol)
+                    signal = strategy.generate_signal(df, symbol, params=params)
                 except Exception as e:
                     logger.error(f"Fejl i {strategy.name} for {symbol}: {e}")
                     continue
@@ -179,6 +184,14 @@ class TradingEngine:
                     signal, sl_price, tp_price, order, current_price, gate_scores,
                     market_regime=context.get("regime"),
                 )
+
+                # Tag trade'en med sin A/B-arm + øg eksperimentets tæller (synkron
+                # session mod samme SQLite-fil; trade er allerede committet ovenfor).
+                if assignment:
+                    with sync_session_maker() as ab_session:
+                        record_trade_arm(trade.id, assignment, ab_session)
+                        ab_session.commit()
+
                 await self.notifier.send_trade_opened(trade, signal.confidence)
 
         await self._maybe_daily_summary()
