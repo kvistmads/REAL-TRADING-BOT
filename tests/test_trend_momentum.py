@@ -9,8 +9,8 @@ from tests.fixtures.ohlcv import (
 )
 
 META_KEYS = {
-    "ema_50", "ema_200", "macd", "macd_signal", "macd_hist",
-    "rsi", "atr", "trend_strength", "macd_strength", "rsi_room",
+    "ema_50", "ema_200", "macd", "macd_signal", "macd_hist", "macd_hist_prev",
+    "rsi", "atr", "trend_strength", "cross_strength", "rsi_room",
 }
 
 

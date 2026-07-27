@@ -28,6 +28,25 @@ class TrendMomentum(BaseStrategy):
 
     MIN_BARS = 200
 
+    # Fuld-styrke-skala for |ema50-ema200|/ema200 pr. asset-class. En fælles
+    # 5%-skala er meningsløs for valuta: empirisk (~2 års 4h-data) trender
+    # EUR/USD & GBP/USD i ~0.5% (median), guld i ~2%, crypto i flere %. Uden
+    # asset-class-skalering bliver forex' trend_strength≈0 → confidence<0.65 →
+    # 0 trades. Skalaerne sætter medianen af hver klasses spread til ~0.5-0.7.
+    TREND_STRENGTH_SCALE = {
+        "crypto": 0.05,
+        "forex": 0.01,
+        "gold": 0.03,
+    }
+
+    # Fuld-styrke-skala for cross-decisiveness = |Δmacd_hist|/atr, dvs. hvor
+    # hurtigt MACD skærer gennem signalet på selve krydsbaren. Erstatter den
+    # gamle macd_strength=|macd_hist|/atr, som ~0 ved ET FRISK kryds (macd≈signal
+    # → hist≈0) og dermed nulstillede sit 0.25-vægtede led præcis når det blev
+    # målt. ATR-normaliseringen gør målet asset-class-agnostisk (empirisk median
+    # ~0.06, p75 ~0.08 for både crypto/forex/gold), så én fælles skala rækker.
+    CROSS_STRENGTH_SCALE = 0.08
+
     def generate_signal(self, df: pd.DataFrame, symbol: str) -> Signal | None:
         if len(df) < self.MIN_BARS:
             return None
@@ -45,13 +64,14 @@ class TrendMomentum(BaseStrategy):
         sig_now = float(macd["macd_signal"].iloc[-1])
         sig_prev = float(macd["macd_signal"].iloc[-2])
         macd_hist = float(macd["macd_hist"].iloc[-1])
+        macd_hist_prev = float(macd["macd_hist"].iloc[-2])
         rsi_now = float(rsi.iloc[-1])
         atr_now = float(atr.iloc[-1])
 
         if any(
             np.isnan(v)
             for v in (ema_50, ema_200, macd_now, macd_prev, sig_now, sig_prev,
-                      macd_hist, rsi_now, atr_now)
+                      macd_hist, macd_hist_prev, rsi_now, atr_now)
         ):
             return None
         if ema_200 == 0 or atr_now <= 0:
@@ -69,10 +89,16 @@ class TrendMomentum(BaseStrategy):
         else:
             return None
 
-        trend_strength = clamp(abs(ema_50 - ema_200) / ema_200, 0, 0.05) / 0.05
-        macd_strength = clamp(abs(macd_hist) / atr_now, 0, 1)
+        scale = self.TREND_STRENGTH_SCALE.get(
+            BaseStrategy.get_asset_class(symbol), 0.05
+        )
+        trend_strength = clamp(abs(ema_50 - ema_200) / ema_200, 0, scale) / scale
+        cross_strength = clamp(
+            abs(macd_hist - macd_hist_prev) / atr_now / self.CROSS_STRENGTH_SCALE,
+            0, 1,
+        )
         confidence = clamp(
-            0.35 + 0.25 * trend_strength + 0.25 * macd_strength + 0.15 * rsi_room,
+            0.35 + 0.25 * trend_strength + 0.25 * cross_strength + 0.15 * rsi_room,
             0.0,
             1.0,
         )
@@ -92,10 +118,11 @@ class TrendMomentum(BaseStrategy):
                 "macd": macd_now,
                 "macd_signal": sig_now,
                 "macd_hist": macd_hist,
+                "macd_hist_prev": macd_hist_prev,
                 "rsi": rsi_now,
                 "atr": atr_now,
                 "trend_strength": trend_strength,
-                "macd_strength": macd_strength,
+                "cross_strength": cross_strength,
                 "rsi_room": rsi_room,
             },
         )
