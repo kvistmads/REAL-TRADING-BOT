@@ -59,10 +59,21 @@ def _setup_scheduler(config: dict):
         _run_reflection, "cron", args=[run_weekly, config, "weekly"],
         id="weekly", **parse_cron(reflection["weekly"]["schedule"]),
     )
+
+    news = reflection.get("news_intelligence", {})
+    if news.get("enabled", False):
+        from reflection.loop_c import run_loop_c
+
+        scheduler.add_job(
+            _run_reflection, "cron", args=[run_loop_c, config, "news"],
+            id="news", **parse_cron(news["schedule"]),
+        )
+
     scheduler.start()
     logger.info(
-        "Reflection-scheduler startet: nightly='%s', weekly='%s' (UTC).",
+        "Reflection-scheduler startet: nightly='%s', weekly='%s', news='%s' (UTC).",
         reflection["nightly"]["schedule"], reflection["weekly"]["schedule"],
+        news.get("schedule", "off") if news.get("enabled") else "off",
     )
     return scheduler
 
