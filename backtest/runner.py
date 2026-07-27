@@ -21,9 +21,16 @@ from strategies.registry import load_strategies  # noqa: E402
 
 # ccxt-symbol → yfinance-ticker for forex/gold. Symboler der IKKE står her
 # hentes fra Binance som crypto.
+#
+# Forex bruger CME-valutafutures (6E=F/6B=F), IKKE spot (EURUSD=X/GBPUSD=X):
+# yfinance-spot returnerer 100% nul-volume, hvilket strukturelt nulstiller
+# volume-gates i reversal_context + volatility_breakout. Futures leverer ~96%
+# non-zero volume og en pris-skala der matcher spot (6E≈EUR/USD, 6B≈GBP/USD),
+# præcis som guld allerede bruger GC=F. Live-forex henter i stedet MT5
+# tick_volume (data/mt5_fetcher.py); futures-volumen er backtestens proxy.
 YFINANCE_MAP = {
-    "EUR/USD": "EURUSD=X",
-    "GBP/USD": "GBPUSD=X",
+    "EUR/USD": "6E=F",
+    "GBP/USD": "6B=F",
     "XAU/USD": "GC=F",
 }
 
