@@ -47,7 +47,10 @@ class TrendMomentum(BaseStrategy):
     # ~0.06, p75 ~0.08 for både crypto/forex/gold), så én fælles skala rækker.
     CROSS_STRENGTH_SCALE = 0.08
 
-    def generate_signal(self, df: pd.DataFrame, symbol: str) -> Signal | None:
+    def generate_signal(
+        self, df: pd.DataFrame, symbol: str, params: dict | None = None
+    ) -> Signal | None:
+        p = params or {}
         if len(df) < self.MIN_BARS:
             return None
 
@@ -89,12 +92,16 @@ class TrendMomentum(BaseStrategy):
         else:
             return None
 
-        scale = self.TREND_STRENGTH_SCALE.get(
-            BaseStrategy.get_asset_class(symbol), 0.05
+        scale = p.get(
+            "trend_strength_scale",
+            self.TREND_STRENGTH_SCALE.get(BaseStrategy.get_asset_class(symbol), 0.05),
         )
+        cross_scale = p.get("cross_strength_scale", self.CROSS_STRENGTH_SCALE)
+        min_conf = p.get("min_confidence", self.min_confidence)
+
         trend_strength = clamp(abs(ema_50 - ema_200) / ema_200, 0, scale) / scale
         cross_strength = clamp(
-            abs(macd_hist - macd_hist_prev) / atr_now / self.CROSS_STRENGTH_SCALE,
+            abs(macd_hist - macd_hist_prev) / atr_now / cross_scale,
             0, 1,
         )
         confidence = clamp(
@@ -103,7 +110,7 @@ class TrendMomentum(BaseStrategy):
             1.0,
         )
 
-        if confidence < self.min_confidence:
+        if confidence < min_conf:
             return None
 
         return Signal(

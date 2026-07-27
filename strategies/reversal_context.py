@@ -29,9 +29,19 @@ class ReversalContext(BaseStrategy):
     MIN_BARS = 30
     LOOKBACK = 30
     SWING_WINDOW = 5
-    VOLUME_MULTIPLIER = 1.2
+    # Overrideable via params (A/B): gate-tærskel på volume-spike ift. MA, minimum
+    # RSI-divergens-delta og confidence-gulv. Defaults = uændret Phase 3-adfærd.
+    MIN_VOLUME_RATIO = 1.2
+    MIN_RSI_DELTA = 5.0
 
-    def generate_signal(self, df: pd.DataFrame, symbol: str) -> Signal | None:
+    def generate_signal(
+        self, df: pd.DataFrame, symbol: str, params: dict | None = None
+    ) -> Signal | None:
+        p = params or {}
+        min_volume_ratio = p.get("min_volume_ratio", self.MIN_VOLUME_RATIO)
+        min_rsi_delta = p.get("min_rsi_delta", self.MIN_RSI_DELTA)
+        min_conf = p.get("min_confidence", self.min_confidence)
+
         if len(df) < self.MIN_BARS:
             return None
 
@@ -69,6 +79,7 @@ class ReversalContext(BaseStrategy):
                         symbol, "long", ema_50, ema_200,
                         price1, price2, rsi1, rsi2, rsi2 - rsi1,
                         vol_recent[sw2], vol_ma_recent[sw2],
+                        min_volume_ratio, min_rsi_delta, min_conf,
                     )
                     if signal is not None:
                         return signal
@@ -84,6 +95,7 @@ class ReversalContext(BaseStrategy):
                         symbol, "short", ema_50, ema_200,
                         price1, price2, rsi1, rsi2, rsi1 - rsi2,
                         vol_recent[sw2], vol_ma_recent[sw2],
+                        min_volume_ratio, min_rsi_delta, min_conf,
                     )
                     if signal is not None:
                         return signal
@@ -91,18 +103,23 @@ class ReversalContext(BaseStrategy):
         return None
 
     def _build(self, symbol, side, ema_50, ema_200, price1, price2,
-               rsi1, rsi2, rsi_delta, volume, volume_ma_20) -> Signal | None:
+               rsi1, rsi2, rsi_delta, volume, volume_ma_20,
+               min_volume_ratio, min_rsi_delta, min_conf) -> Signal | None:
         # Kontekst-gate: divergens skal pege mod trenden.
         if side == "long" and not (ema_50 < ema_200):
             return None
         if side == "short" and not (ema_50 > ema_200):
             return None
 
+        # Divergens-gate: RSI-deltaet skal være mindst min_rsi_delta.
+        if rsi_delta < min_rsi_delta:
+            return None
+
         # Volume-gate på seneste swing-bar.
         if np.isnan(volume) or np.isnan(volume_ma_20) or volume_ma_20 <= 0:
             return None
         volume_ratio = volume / volume_ma_20
-        if volume <= self.VOLUME_MULTIPLIER * volume_ma_20:
+        if volume <= min_volume_ratio * volume_ma_20:
             return None
 
         divergence_strength = clamp(rsi_delta / 20, 0, 1)
@@ -110,7 +127,7 @@ class ReversalContext(BaseStrategy):
         confidence = clamp(
             0.45 + 0.30 * divergence_strength + 0.25 * volume_strength, 0.0, 1.0
         )
-        if confidence < self.min_confidence:
+        if confidence < min_conf:
             return None
 
         return Signal(
