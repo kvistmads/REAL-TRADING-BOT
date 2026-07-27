@@ -140,6 +140,50 @@ class ABExperiment(Base):
     min_trades_per_arm: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
 
 
+class ShadowSignal(Base):
+    """En nyhedsdrevet prognose — ikke et ægte trade, men en tracked forudsigelse.
+
+    Loop C (News Intelligence) genererer disse fra headlines og evaluerer dem senere
+    mod den faktiske prisbevægelse. De rører ALDRIG kapital — de er ren måling af, om
+    news-signaler ville have haft merværdi (Phase 5 kan så aktivere et confirmation-hook).
+    """
+
+    __tablename__ = "shadow_signals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    symbol: Mapped[str] = mapped_column(String, nullable=False)  # "BTC/USDT", "EUR/USD" osv.
+    predicted_direction: Mapped[str] = mapped_column(String, nullable=False)  # "up"|"down"|"neutral"
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)  # 0.0-1.0
+    horizon_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
+    eval_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)  # created_at + horizon
+    # Referencepris ved signal-tidspunktet. Ikke i PRD-skemaet, men nødvendig for at
+    # kunne beregne faktisk retning ved evaluering (vi kan ikke tidsrejse tilbage til
+    # created_at-prisen bagefter). None = pris kunne ikke hentes → signalet kan ikke evalueres.
+    price_at_signal: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    actual_direction: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # udfyldes ved eval
+    correct: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)  # None = afventer eval
+    news_summary: Mapped[str] = mapped_column(String, nullable=False, default="")
+    sentiment_scores: Mapped[Any] = mapped_column(JSON, nullable=False, default=dict)
+    source: Mapped[str] = mapped_column(String, nullable=False, default="combined")
+    # Konfirmation/diskrepans ift. tekniske strategier (JSON-lister af strategy_id).
+    matching_strategies: Mapped[Any] = mapped_column(JSON, nullable=True)
+    conflicting_strategies: Mapped[Any] = mapped_column(JSON, nullable=True)
+
+
+class PromotionAlert(Base):
+    """Log over sendte news-promotion-alerts (én pr. symbol×kilde) — undgår Telegram-spam."""
+
+    __tablename__ = "news_promotion_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    symbol: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    accuracy: Mapped[float] = mapped_column(Float, nullable=False)
+    n_signals: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 def _apply_additive_migrations(conn) -> None:
     """Tilføj nye kolonner som create_all ikke håndterer på eksisterende tabeller.
 

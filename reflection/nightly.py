@@ -30,6 +30,7 @@ from reflection.ab_tracker import ABTracker
 from reflection.analyst import ReflectionAnalyst
 from reflection.applier import ParameterApplier
 from reflection.chromadb_store import ObservationStore
+from reflection.strategy_memory import StrategyMemory
 from reflection.reporter import (
     TelegramReporter,
     format_nightly_telegram,
@@ -43,17 +44,26 @@ logger = logging.getLogger(__name__)
 # Prompt-byggere (tre-lags cascading analyse)
 # ---------------------------------------------------------------------------
 
-def _prompt_layer1(strategy_id: str, sub, meta_cols: list[str]) -> str:
+def _prompt_layer1(strategy_id: str, sub, meta_cols: list[str], memory_ctx: str = "") -> str:
     keys = ", ".join(c.replace("meta_", "") for c in meta_cols) or "(ingen metadata)"
     cols = ["symbol", "side", "pnl_pct", "won", "session", "market_regime", "adx_at_entry", *meta_cols]
     cols = [c for c in cols if c in sub.columns]
     csv = sub[cols].to_csv(index=False)
+    memory_block = ""
+    if memory_ctx:
+        memory_block = (
+            f"\n{memory_ctx}\n\n"
+            "## Vigtigt: Foreslå IKKE ændringer der allerede er afvist (se afviste forslag ovenfor).\n"
+            "Byg videre på auto-applied ændringer fremfor at revertere dem uden stærkt "
+            "statistisk grundlag.\n"
+        )
     return (
         f"Du er en kvantitativ trading-analytiker. Nedenfor er {len(sub)} lukkede trades "
         f"for strategi '{strategy_id}'. Hver trade har metadata (indikatorer ved entry) og "
         f"outcome (pnl_pct, won).\n\n"
         f"Find de indikator-tærskler der bedst skelner vindende fra tabende trades.\n"
-        f"Se særligt på: {keys}.\n\n"
+        f"Se særligt på: {keys}.\n"
+        f"{memory_block}\n"
         "Svar KUN med et JSON-array af observationer i formatet:\n"
         '[{"strategy_id":"...","type":"parameter_suggestion","parameter":"...",'
         '"current_value":...,"suggested_value":...,'
@@ -75,13 +85,22 @@ def _prompt_layer2(strategy_id: str, agg_csv: str) -> str:
     )
 
 
-def _prompt_layer3(weekly_csv: str, corr_csv: str) -> str:
+def _prompt_layer3(weekly_csv: str, corr_csv: str, shadow_csv: str = "", lookback_days: int = 30) -> str:
+    shadow_block = ""
+    if shadow_csv:
+        shadow_block = (
+            f"\n\n## News Intelligence performance (seneste {lookback_days} dage):\n"
+            f"{shadow_csv}\n\n"
+            "Find: Er der perioder hvor news-intelligence havde høj accuracy men vores tekniske "
+            "strategier underpræsterede? Det indikerer at news-signalet kunne have haft merværdi."
+        )
     return (
         "Nedenfor er de tre strategiers ugentlige pnl og deres korrelationsmatrix.\n"
         "Find: (1) perioder hvor alle taber samtidig (systemisk fejl), (2) om strategierne "
         "reelt er ukorrelerede, (3) om porteføljen giver reel diversifikation.\n\n"
         'Svar med type: "portfolio_pattern" | "correlation_warning" | "diversification_gap".\n\n'
         f"UGENTLIG PNL PR. STRATEGI:\n{weekly_csv}\n\nKORRELATIONSMATRIX:\n{corr_csv}"
+        f"{shadow_block}"
     )
 
 
@@ -107,6 +126,7 @@ def run_nightly(
     store=None,
     applier=None,
     reporter=None,
+    memory=None,
     cfg_path: str = "config.yaml",
 ) -> dict:
     """Kør Loop A. Returnér et summary-dict (til logging/test).
@@ -131,6 +151,8 @@ def run_nightly(
         applier = ParameterApplier()
     if reporter is None:
         reporter = TelegramReporter(config)
+    if memory is None:
+        memory = StrategyMemory(store=store)
     gate_cfg = _gate_cfg(rcfg)
     ab = ABTracker(
         significance_threshold=rcfg["ab_experiments"]["significance_threshold"],
@@ -157,16 +179,23 @@ def run_nightly(
                     continue
                 meta_cols = extractor.meta_columns(sub)
                 ctx = f"strategi {strategy_id} nightly analyse"
-                raw_observations += analyst.analyse(_prompt_layer1(strategy_id, sub, meta_cols), ctx)
+                memory_ctx = memory.build_context(strategy_id, session)
+                raw_observations += analyst.analyse(
+                    _prompt_layer1(strategy_id, sub, meta_cols, memory_ctx), ctx
+                )
                 agg = extractor.aggregate_by_symbol_session_regime(sub)
                 if not agg.empty:
                     raw_observations += analyst.analyse(_prompt_layer2(strategy_id, agg.to_csv(index=False)), ctx)
-            # Lag 3 — portefølje
+            # Lag 3 — portefølje (beriget med news-intelligence-performance)
             weekly = extractor.weekly_pnl_by_strategy(df)
             corr = extractor.strategy_correlation(weekly)
+            lookback = rcfg["nightly"]["lookback_days"]
+            shadow_df = extractor.extract_shadow_signal_performance(session, lookback)
+            shadow_csv = shadow_df.to_csv(index=False) if not shadow_df.empty else ""
             if not weekly.empty:
                 raw_observations += analyst.analyse(
-                    _prompt_layer3(weekly.to_csv(), corr.to_csv()), "portefølje meta-analyse"
+                    _prompt_layer3(weekly.to_csv(), corr.to_csv(), shadow_csv, lookback),
+                    "portefølje meta-analyse",
                 )
 
         # Dispatch hver observation gennem gaten

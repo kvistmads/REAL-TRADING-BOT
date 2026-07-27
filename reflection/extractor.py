@@ -18,7 +18,7 @@ from typing import Any
 import pandas as pd
 from sqlalchemy import func, select
 
-from core.database import Trade
+from core.database import ShadowSignal, Trade
 
 _ADX_RE = re.compile(r"ADX\s*=\s*(\d+(?:\.\d+)?)")
 
@@ -157,3 +157,37 @@ def strategy_correlation(weekly_pnl: pd.DataFrame) -> pd.DataFrame:
     if weekly_pnl.empty or weekly_pnl.shape[1] < 2:
         return pd.DataFrame()
     return weekly_pnl.corr(method="pearson").round(2)
+
+
+def extract_shadow_signal_performance(session, lookback_days: int) -> pd.DataFrame:
+    """Hent evaluerede ShadowSignals (Loop C) fra de seneste N dage.
+
+    Samme rolle som ``extract_closed_trades`` men for news-signaler: outcome er
+    ``correct`` (True/False) frem for pnl_pct. Bruges af Loop A Lag 3 til at
+    korrelere news-signal-accuracy med strategiernes performance i samme perioder.
+    Kun signaler der er blevet evalueret (correct != None) tages med.
+    """
+    cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+    signals = (
+        session.execute(
+            select(ShadowSignal).where(
+                ShadowSignal.correct.isnot(None),
+                ShadowSignal.created_at >= cutoff,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    rows = [
+        {
+            "created_at": s.created_at,
+            "symbol": s.symbol,
+            "source": s.source,
+            "predicted_direction": s.predicted_direction,
+            "actual_direction": s.actual_direction,
+            "confidence": s.confidence,
+            "correct": bool(s.correct),
+        }
+        for s in signals
+    ]
+    return pd.DataFrame(rows)

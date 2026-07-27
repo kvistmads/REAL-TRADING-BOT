@@ -79,6 +79,23 @@ reflection:
     min_trades_per_arm: 30            # Minimum trades i hvert arm før konklusion
     significance_threshold: 0.10      # Minimum relativ forbedring for "b_wins"
 
+  news_intelligence:                  # Loop C — Phase 4.1
+    enabled: true
+    schedule: "0 */2 * * *"           # hver 2. time
+    horizon_hours: 24                 # evalueringshorisont for shadow signals
+    min_confidence: 0.55              # minimum for at gemme shadow signal
+    promotion_accuracy: 0.60          # accuracy-grænse for Telegram-alert
+    promotion_min_signals: 30         # minimum antal signals for at vurdere promotion
+    sources:
+      cryptopanic: true
+      fear_greed: true
+      alpaca: false                   # sæt true hvis ALPACA_API_KEY er i .env
+    # Confirmation-hook (Phase 5 feature — byg infrastrukturen, aktiver ikke endnu)
+    confirmation_hook:
+      enabled: false
+      confidence_boost: 0.05          # +5% confidence ved match
+      confidence_damp: 0.08           # -8% confidence ved konflikt
+
   # Hårde grænser — disse parametre kan ALDRIG auto-applies uanset confidence
   protected_parameters:
     - stake_amount
