@@ -7,3 +7,10 @@ __pycache__/
 *.sqlite
 .DS_Store
 backtest_results/
+
+# Phase 4 Learning Loop
+# (inline-kommentarer er IKKE tilladt i .gitignore — mønstret skal stå alene på linjen)
+data/chromadb/
+reflection/audit.log
+reflection/reports/
+config.yaml.bak.*

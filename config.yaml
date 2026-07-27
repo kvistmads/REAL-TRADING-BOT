@@ -52,3 +52,38 @@ notifications:
   telegram:
     enabled: false          # Sæt til true når TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID er i .env
     daily_summary_time: "22:00"
+
+reflection:
+  enabled: true
+  min_trades_for_analysis: 200        # Under dette: observation-only, ingen auto-apply
+  anthropic_model: "claude-opus-4-8"  # Bruges til begge loops
+
+  nightly:
+    schedule: "0 2 * * *"             # 02:00 UTC
+    lookback_days: 30                 # Analyser trades fra de seneste N dage
+    min_trades_per_strategy: 10       # Spring strategi over hvis for få trades
+
+  weekly:
+    schedule: "0 3 * * 0"             # Søndag 03:00 UTC
+    include_git_diff: true
+    include_profiling: true
+
+  confidence_gate:
+    auto_apply_threshold: 0.85        # >= dette: auto-applies (hvis n >= min_sample)
+    telegram_threshold: 0.65          # >= dette: send til Telegram til godkendelse
+    # Under 0.65: kun i rapport, ingen action
+    min_sample_for_auto: 30           # Minimum trades-grundlag for auto-apply
+    max_change_pct: 0.20              # Auto-apply må max ændre en parameter med 20%
+
+  ab_experiments:
+    min_trades_per_arm: 30            # Minimum trades i hvert arm før konklusion
+    significance_threshold: 0.10      # Minimum relativ forbedring for "b_wins"
+
+  # Hårde grænser — disse parametre kan ALDRIG auto-applies uanset confidence
+  protected_parameters:
+    - stake_amount
+    - leverage
+    - max_open_trades
+    - sl_pct
+    - tp_pct
+    - total_capital

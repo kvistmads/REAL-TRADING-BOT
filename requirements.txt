@@ -15,6 +15,13 @@ pytest-asyncio>=0.23.0
 # Backtest-datakilder: Binance (ccxt, ovenfor) til crypto, yfinance til forex/gold.
 yfinance>=0.2.40
 
+# Phase 4 — Learning Loop (reflection/). Installér med --only-binary=:all: (chromadb
+# trækker onnxruntime/tokenizers der ellers bygger fra kilde):
+#   .venv/bin/pip install --only-binary=:all: chromadb anthropic "apscheduler>=3.10,<4.0"
+chromadb>=0.5.0          # embeddings-store for historiske observationer
+anthropic>=0.40.0        # LLM-analyse (læser ANTHROPIC_API_KEY fra .env)
+apscheduler>=3.10.0,<4.0 # cron-scheduling af nightly/weekly (v4 har breaking API-ændringer)
+
 # pandas-ta er BEVIDST udeladt. På dette miljø (numpy 2.5 / pandas 3.0) kan den ikke køre:
 #   - pandas-ta>=0.3.14b resolver til 0.4.71b0, som kræver numba → numba tvinger numpy<2.4 (nedgradering).
 #   - Den ældre 0.3.14b0 gør `from numpy import NaN`, som blev fjernet i numpy 2.0 → importerer ikke.
