@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import ccxt
@@ -18,6 +19,8 @@ from backtest import report  # noqa: E402
 from data.indicators import add_all  # noqa: E402
 from strategies.base import BaseStrategy  # noqa: E402
 from strategies.registry import load_strategies  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 # ccxt-symbol → yfinance-ticker for forex/gold. Symboler der IKKE står her
 # hentes fra Binance som crypto.
@@ -204,6 +207,56 @@ def _run_one(strategy, symbol: str, config: dict, df: pd.DataFrame) -> tuple[dic
     return metrics_mod.compute(trades), trades
 
 
+def _to_db_record(strategy_id: str, symbol: str, m: dict, period: tuple, source_file: str) -> dict:
+    """Byg et BacktestResult-kwargs-dict fra en metrics-dict.
+
+    Normaliserer til research-lagets forventede enheder: win_rate/max_drawdown som
+    fraktioner (0.0-1.0), total_return_pct i procent. profit_factor=inf → None.
+    """
+    pf = m.get("profit_factor", 0.0)
+    start, end = period if period else (None, None)
+    return {
+        "strategy_id": strategy_id,
+        "symbol": symbol,
+        "period_start": start,
+        "period_end": end,
+        "total_trades": int(m.get("total_trades", 0)),
+        "win_rate": round(m.get("win_rate", 0.0) / 100, 4),
+        "profit_factor": None if pf == float("inf") else round(float(pf), 4),
+        "sharpe": round(float(m.get("sharpe", 0.0)), 4),
+        "max_drawdown": round(abs(m.get("max_drawdown_pct", 0.0)) / 100, 4),
+        "total_return_pct": round(float(m.get("total_pnl_pct", 0.0)), 4),
+        "source_file": source_file,
+    }
+
+
+def save_results_to_db(records: list[dict], session_factory=None) -> int:
+    """Gem backtest-records til BacktestResult-tabellen. Returnér antal gemte rækker.
+
+    Best-effort: DB-fejl må aldrig vælte en suite-kørsel (logges og springes over).
+    Importeres lazily så backtest-runneren ikke trækker DB-laget ind ved simple kørsler.
+    session_factory kan injiceres (tests); ellers bruges den synkrone produktions-session.
+    """
+    if not records:
+        return 0
+    try:
+        from core.database import BacktestResult
+
+        if session_factory is None:
+            from core.database import init_sync_db, sync_session_maker
+
+            init_sync_db()
+            session_factory = sync_session_maker
+        with session_factory() as session:
+            for r in records:
+                session.add(BacktestResult(**r))
+            session.commit()
+        return len(records)
+    except Exception as e:  # pragma: no cover - DB-miljøafhængigt
+        logger.warning("Kunne ikke gemme backtest-resultater til DB: %s", e)
+        return 0
+
+
 def _run_single(args, config) -> int:
     registry = load_strategies()
     try:
@@ -255,11 +308,17 @@ def _run_all(config, timeframe: str) -> int:
 
     # Hent hvert symbol én gang og genbrug på tværs af strategier.
     data: dict[str, pd.DataFrame] = {}
+    periods: dict[str, tuple] = {}
     for symbol in symbols:
         print(f"  Henter {symbol:10s} ...", end="", flush=True)
         try:
             df = fetch_data(symbol, timeframe)
             data[symbol] = df
+            if not df.empty:
+                periods[symbol] = (
+                    df["time"].iloc[0].to_pydatetime(),
+                    df["time"].iloc[-1].to_pydatetime(),
+                )
             print(f" {len(df)} barer"
                   + (f"  ({df['time'].iloc[0].date()} → {df['time'].iloc[-1].date()})"
                      if not df.empty else ""))
@@ -267,7 +326,9 @@ def _run_all(config, timeframe: str) -> int:
             data[symbol] = None
             print(f" FEJL: {type(e).__name__}: {str(e)[:80]}")
 
+    source_file = f"suite_{date.today().isoformat()}.csv"
     rows: list[dict] = []
+    db_records: list[dict] = []
     all_trades: list[dict] = []
     for strategy in strategies:
         for symbol in symbols:
@@ -291,12 +352,20 @@ def _run_all(config, timeframe: str) -> int:
                 "sharpe": m["sharpe"], "total_pnl_pct": m["total_pnl_pct"],
                 "pass": _passes(m),
             })
+            # Kun symboler med faktiske data (og dermed en kendt periode) importeres til DB.
+            if m["total_trades"] > 0 and symbol in periods:
+                db_records.append(
+                    _to_db_record(strategy.name, symbol, m, periods[symbol], source_file)
+                )
             for t in trades:
                 t["strategy_id"] = strategy.name
                 all_trades.append(t)
 
     _print_suite_table(rows)
     _save_suite_csv(rows)
+    saved = save_results_to_db(db_records)
+    if saved:
+        print(f"  {saved} backtest-resultater importeret til DB (backtest_results-tabellen)")
     return 0
 
 

@@ -157,8 +157,8 @@ _CATEGORY_HEADINGS = {
 _IMPACT_RANK = {"high": 0, "medium": 1, "low": 2}
 
 
-def format_weekly_markdown(date_str: str, findings: list[dict]) -> str:
-    """Byg weekly arkitektur-rapport (PRD Opgave 3c)."""
+def format_weekly_markdown(date_str: str, findings: list[dict], research_section: str = "") -> str:
+    """Byg weekly arkitektur-rapport (PRD Opgave 3c) + valgfrit research-afsnit (Phase 5)."""
     lines = [f"# Weekly Arkitektur-rapport {date_str}", ""]
 
     for cat, heading in _CATEGORY_HEADINGS.items():
@@ -193,12 +193,21 @@ def format_weekly_markdown(date_str: str, findings: list[dict]) -> str:
             )
     else:
         lines.append("Ingen fund denne uge.")
+
+    if research_section:
+        lines.append("")
+        lines.append("## Anbefalede A/B-eksperimenter baseret på ekstern research")
+        lines.append("*Forslag fra research-laget — aldrig auto-apply.*")
+        lines.append("")
+        lines.append(research_section)
     return "\n".join(lines)
 
 
-def write_weekly_report(date_str: str, findings: list[dict], reports_dir: str = REPORTS_DIR) -> str:
+def write_weekly_report(
+    date_str: str, findings: list[dict], reports_dir: str = REPORTS_DIR, research_section: str = ""
+) -> str:
     Path(reports_dir).mkdir(parents=True, exist_ok=True)
     path = f"{reports_dir}/weekly_{date_str}.md"
     with open(path, "w") as f:
-        f.write(format_weekly_markdown(date_str, findings))
+        f.write(format_weekly_markdown(date_str, findings, research_section))
     return path

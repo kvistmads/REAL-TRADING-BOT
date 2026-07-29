@@ -35,6 +35,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from reflection.analyst import ReflectionAnalyst
 from reflection.reporter import TelegramReporter, write_weekly_report
+from reflection.research.researcher import Researcher
+
+_STRATEGY_IDS = ["trend_momentum", "reversal_context", "volatility_breakout"]
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +218,17 @@ def run_weekly(config: dict, dry_run: bool = False) -> dict:
     findings = analyst.analyse(prompt, context_text="")
     logger.info("Weekly: %d arkitektur-fund.", len(findings))
 
-    report_path = write_weekly_report(date_str, findings)
+    # Phase 5: research-baserede A/B-eksperiment-forslag (curated viden, aldrig auto-apply).
+    research_cfg = rcfg.get("research", {})
+    research_section = ""
+    if research_cfg.get("enabled", True):
+        try:
+            researcher = Researcher(enable_web=research_cfg.get("web_search", False))
+            research_section = researcher.build_ab_experiment_suggestions(_STRATEGY_IDS)
+        except Exception as e:  # research må aldrig vælte weekly
+            logger.warning("Kunne ikke bygge research-afsnit: %s", e)
+
+    report_path = write_weekly_report(date_str, findings, research_section=research_section)
     reporter = TelegramReporter(config)
     reporter.send(f"📐 Weekly arkitektur-rapport {date_str} — {len(findings)} fund.\nSe {report_path}")
 

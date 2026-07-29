@@ -184,34 +184,43 @@ class PromotionAlert(Base):
     n_signals: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
-def _apply_additive_migrations(conn) -> None:
-    """Tilføj nye kolonner som create_all ikke håndterer på eksisterende tabeller.
+class BacktestResult(Base):
+    """Historisk backtest-baseline pr. (strategi × symbol) — importeret fra suite-kørsler.
 
-    create_all opretter kun MANGLENDE tabeller — den tilføjer aldrig en ny kolonne
-    til en tabel der allerede findes. Denne guardede ALTER er idempotent (tjekker
-    PRAGMA først), additiv og datatabs-fri; ingen Alembic i projektet. Kaldes efter
-    create_all: hvis tabellen lige er oprettet, har den allerede kolonnen (no-op);
-    findes den fra før uden kolonnen, tilføjes den her.
+    Research-laget (Phase 5) læser herfra for at sammenligne live-performance med den
+    backtestede baseline. Tal gemmes normaliseret: win_rate/max_drawdown som fraktioner
+    (0.0-1.0), total_return_pct i procent. profit_factor kan være None (ingen tabende
+    trades → uendelig i metrics-laget; None her betyder "udefineret/inf").
     """
-    existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(trades)")}
-    if existing and "ab_arm" not in existing:
-        conn.exec_driver_sql("ALTER TABLE trades ADD COLUMN ab_arm VARCHAR")
+
+    __tablename__ = "backtest_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    strategy_id: Mapped[str] = mapped_column(String, nullable=False)
+    symbol: Mapped[str] = mapped_column(String, nullable=False)
+    period_start: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    period_end: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    total_trades: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    win_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    profit_factor: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sharpe: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_drawdown: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    total_return_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    source_file: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await conn.run_sync(_apply_additive_migrations)
 
 
 def init_sync_db() -> None:
-    """Opret alle tabeller (inkl. observations/ab_experiments) via den synkrone engine.
+    """Opret alle tabeller via den synkrone engine (bootstrap for reflection-loopsene).
 
     create_all er additivt for tabeller: eksisterende tabeller røres ikke, kun
-    manglende oprettes. Nye kolonner på eksisterende tabeller tilføjes af
-    _apply_additive_migrations. Bruges af reflection-loopsene, som ikke deler
-    event-loop med engine.
+    manglende oprettes — så en frisk DB (eller en ny tabel som backtest_results) er
+    dækket her. NYE KOLONNER på eksisterende tabeller håndteres af Alembic
+    (``alembic upgrade head``), ikke af denne funktion; se alembic/ og CLAUDE.md.
     """
     Base.metadata.create_all(sync_engine)
-    with sync_engine.begin() as conn:
-        _apply_additive_migrations(conn)

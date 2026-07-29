@@ -14,3 +14,6 @@ data/chromadb/
 reflection/audit.log
 reflection/reports/
 config.yaml.bak.*
+
+# Phase 5 — dashboard runtime-status (skrives af status_writer.py)
+bot_status.json
