@@ -60,7 +60,36 @@ ingen fejl) — så `--dry-run` virker uden nøgle.
   syntetisk indikator/strategi-hot-path; A/B-armtildeling i execution er ikke wired (hård
   grænse mod live-logik); Telegram-godkendelse via long-polling `getUpdates`, ikke webhook.
 
-## Ikke bygget endnu
-Live trading, confluence-gate (forbliver OFF), FastAPI-dashboard (Phase 5).
-EMA Crossover / SR Breakout som standalone (absorberet i composites).
-A/B-armtildeling i execution-laget; webhook-server til Telegram-godkendelse.
+## Phase 5 — Research + Dashboard + Migrationer
+- **Research-lag (`reflection/research/`)**: beriger Loop A Lag 1-prompt (og Loop B-rapporten)
+  med ekstern viden. `strategy_db.py` (curated benchmarks/parameter-ranges, altid offline),
+  `backtest_reader.py` (læser `BacktestResult`-tabellen), `web_searcher.py` (best-effort urllib,
+  returnerer ALTID `""` ved fejl), `researcher.py` (orchestrerer). Styres af `reflection.research`
+  i config: `web_search: false` som default → nightly er hurtig/netværks-uafhængig; den curated
+  viden dækker offline-behovet. Enheder: wr/max_dd som fraktioner (0-1), matcher `BacktestResult`.
+- **Backtest → DB**: `backtest/runner.py --all` importerer nu suite-resultater til
+  `BacktestResult` via `save_results_to_db` (win_rate/max_drawdown normaliseret til fraktioner,
+  profit_factor=inf → None). CSV skrives stadig som før.
+- **Dashboard (`dashboard.html` + `status_writer.py`)**: engine kalder `write_status` →
+  `bot_status.json` (atomisk skriv) ved opstart + throttlet til hvert 60. sek. (`_STATUS_INTERVAL`).
+  Dashboardet er statisk HTML der poller JSON'en (server med `python -m http.server`; viser
+  DEMO DATA hvis filen mangler). Loop C-sektion viser shadow-signal-accuracy pr. symbol.
+- **News confirmation-hook (Del C)**: `core/engine._apply_news_confirmation` → ren logik i
+  `reflection/news/confirmation.py`. Justerer signal-confidence (+boost ved match / -damp ved
+  konflikt) ud fra `get_symbol_accuracy` + seneste shadow signal. **Default OFF** via
+  `reflection.news_intelligence.confirmation_hook.enabled=false` — aktiveres manuelt.
+- **Alembic**: erstatter `_apply_additive_migrations` (fjernet). `alembic/env.py` bruger
+  `core.database.Base` + `SYNC_DATABASE_URL` (override med `-x dburl=...`), `render_as_batch=True`
+  for SQLite. `create_all` er stadig bootstrap (tests + nye tabeller); NYE KOLONNER på
+  eksisterende tabeller kræver `alembic upgrade head`. Eksisterende DB'er stamps: `alembic stamp head`.
+
+## Ikke bygget endnu (Phase 6+)
+Live trading + MEXC API-keys (Phase 6), confluence-gate (forbliver OFF),
+FastAPI-dashboard (HTML-dashboardet dækker behovet), Twitter/X, multi-exchange.
+EMA Crossover / SR Breakout som standalone (absorberet i composites);
+webhook-server til Telegram-godkendelse (long-polling `getUpdates` bruges).
+
+**Phase 5-afvigelser fra PRD**: `_apply_news_confirmation` køres EFTER `generate_signal`
+(hooket justerer et eksisterende signals confidence — kan ikke køre før signalet findes);
+research-web-søgning er config-gated OFF som default (reliability); `status_writer.py`/
+`dashboard.html` blev bygget fra bunden (PRD antog de fandtes).

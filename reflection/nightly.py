@@ -30,6 +30,7 @@ from reflection.ab_tracker import ABTracker
 from reflection.analyst import ReflectionAnalyst
 from reflection.applier import ParameterApplier
 from reflection.chromadb_store import ObservationStore
+from reflection.research.researcher import Researcher
 from reflection.strategy_memory import StrategyMemory
 from reflection.reporter import (
     TelegramReporter,
@@ -44,7 +45,9 @@ logger = logging.getLogger(__name__)
 # Prompt-byggere (tre-lags cascading analyse)
 # ---------------------------------------------------------------------------
 
-def _prompt_layer1(strategy_id: str, sub, meta_cols: list[str], memory_ctx: str = "") -> str:
+def _prompt_layer1(
+    strategy_id: str, sub, meta_cols: list[str], memory_ctx: str = "", research_ctx: str = ""
+) -> str:
     keys = ", ".join(c.replace("meta_", "") for c in meta_cols) or "(ingen metadata)"
     cols = ["symbol", "side", "pnl_pct", "won", "session", "market_regime", "adx_at_entry", *meta_cols]
     cols = [c for c in cols if c in sub.columns]
@@ -57,13 +60,27 @@ def _prompt_layer1(strategy_id: str, sub, meta_cols: list[str], memory_ctx: str 
             "Byg videre på auto-applied ændringer fremfor at revertere dem uden stærkt "
             "statistisk grundlag.\n"
         )
+    research_block = ""
+    if research_ctx:
+        research_block = (
+            f"\n{research_ctx}\n\n"
+            "## Instruktioner til analysen:\n"
+            "- Hvis makro-konteksten forklarer underperformance → flag perioden som atypisk, "
+            "foreslå IKKE parameterændringer\n"
+            "- Sammenlign nuværende parametre med anbefalede ranges — prioritér korrektioner "
+            "der er UDENFOR range\n"
+            "- Sammenlign live performance med backtest baseline — store afvigelser kræver forklaring\n"
+            "- Byg videre på hvad der allerede virker (se memory-kontekst) fremfor at "
+            "eksperimentere bredt\n"
+        )
     return (
         f"Du er en kvantitativ trading-analytiker. Nedenfor er {len(sub)} lukkede trades "
         f"for strategi '{strategy_id}'. Hver trade har metadata (indikatorer ved entry) og "
         f"outcome (pnl_pct, won).\n\n"
         f"Find de indikator-tærskler der bedst skelner vindende fra tabende trades.\n"
         f"Se særligt på: {keys}.\n"
-        f"{memory_block}\n"
+        f"{memory_block}"
+        f"{research_block}\n"
         "Svar KUN med et JSON-array af observationer i formatet:\n"
         '[{"strategy_id":"...","type":"parameter_suggestion","parameter":"...",'
         '"current_value":...,"suggested_value":...,'
@@ -71,6 +88,44 @@ def _prompt_layer1(strategy_id: str, sub, meta_cols: list[str], memory_ctx: str 
         '"confidence":0.0,"reasoning":"..."}]\n\n'
         f"TRADES:\n{csv}"
     )
+
+
+def _live_metrics(sub) -> dict:
+    """Kompakte live-metrics for et (strategi × symbol)-subset til research-sammenligning."""
+    n = len(sub)
+    if n == 0:
+        return {"trades": 0, "wr": 0.0, "pf": None, "avg_pnl_pct": 0.0}
+    gains = float(sub.loc[sub["pnl_pct"] > 0, "pnl_pct"].sum())
+    losses = float(-sub.loc[sub["pnl_pct"] < 0, "pnl_pct"].sum())
+    pf = None if losses == 0 else round(gains / losses, 3)
+    return {
+        "trades": n,
+        "wr": round(float((sub["pnl_pct"] > 0).mean()), 3),
+        "pf": pf,
+        "avg_pnl_pct": round(float(sub["pnl_pct"].mean()), 3),
+    }
+
+
+def _build_research_ctx(researcher, strategy_id: str, sub, config: dict, period_str: str, session) -> str:
+    """Byg research-kontekst pr. symbol for en strategi (best-effort → "" ved fejl)."""
+    if researcher is None:
+        return ""
+    try:
+        strat_cfg = config.get("strategies", {})
+        sparams = strat_cfg.get("params", {}).get(strategy_id, {})
+        current_params = {**sparams, "min_confidence": strat_cfg.get("min_confidence")}
+        blocks = []
+        for symbol in sub["symbol"].dropna().unique():
+            sym_sub = sub[sub["symbol"] == symbol]
+            blocks.append(
+                researcher.build_context(
+                    strategy_id, symbol, period_str, current_params, _live_metrics(sym_sub), session
+                )
+            )
+        return "\n\n".join(blocks)
+    except Exception as e:  # research må aldrig vælte nightly
+        logger.warning("Kunne ikke bygge research-kontekst for %s: %s", strategy_id, e)
+        return ""
 
 
 def _prompt_layer2(strategy_id: str, agg_csv: str) -> str:
@@ -127,6 +182,7 @@ def run_nightly(
     applier=None,
     reporter=None,
     memory=None,
+    researcher=None,
     cfg_path: str = "config.yaml",
 ) -> dict:
     """Kør Loop A. Returnér et summary-dict (til logging/test).
@@ -153,6 +209,11 @@ def run_nightly(
         reporter = TelegramReporter(config)
     if memory is None:
         memory = StrategyMemory(store=store)
+    if researcher is None:
+        research_cfg = rcfg.get("research", {})
+        if research_cfg.get("enabled", True):
+            researcher = Researcher(enable_web=research_cfg.get("web_search", False), store=store)
+    period_str = datetime.utcnow().strftime("%B %Y")
     gate_cfg = _gate_cfg(rcfg)
     ab = ABTracker(
         significance_threshold=rcfg["ab_experiments"]["significance_threshold"],
@@ -180,8 +241,11 @@ def run_nightly(
                 meta_cols = extractor.meta_columns(sub)
                 ctx = f"strategi {strategy_id} nightly analyse"
                 memory_ctx = memory.build_context(strategy_id, session)
+                research_ctx = _build_research_ctx(
+                    researcher, strategy_id, sub, config, period_str, session
+                )
                 raw_observations += analyst.analyse(
-                    _prompt_layer1(strategy_id, sub, meta_cols, memory_ctx), ctx
+                    _prompt_layer1(strategy_id, sub, meta_cols, memory_ctx, research_ctx), ctx
                 )
                 agg = extractor.aggregate_by_symbol_session_regime(sub)
                 if not agg.empty:

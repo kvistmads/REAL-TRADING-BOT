@@ -121,6 +121,42 @@ def get_accuracy_report(session, symbol: str | None = None, min_signals: int = 1
     }
 
 
+def get_symbol_accuracy(session, symbol: str, min_signals: int = 10) -> float | None:
+    """Accuracy for ét symbol over evaluerede shadow signals, ellers None.
+
+    Returnerer None hvis der er færre end ``min_signals`` evaluerede signaler — så
+    confirmation-hooket (Phase 5) ikke justerer på et for tyndt grundlag.
+    """
+    signals = (
+        session.execute(
+            select(ShadowSignal).where(
+                ShadowSignal.symbol == symbol,
+                ShadowSignal.correct.isnot(None),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    total = len(signals)
+    if total < min_signals:
+        return None
+    correct = sum(1 for s in signals if s.correct)
+    return round(correct / total, 3)
+
+
+def get_latest_shadow_signal(session, symbol: str) -> ShadowSignal | None:
+    """Seneste shadow signal for symbol (uanset om det er evalueret), ellers None."""
+    return (
+        session.execute(
+            select(ShadowSignal)
+            .where(ShadowSignal.symbol == symbol)
+            .order_by(ShadowSignal.created_at.desc())
+        )
+        .scalars()
+        .first()
+    )
+
+
 def _format_alert(symbol: str, source: str, accuracy: float, n: int) -> str:
     return (
         f"📡 News Intelligence Alert — {symbol}\n\n"

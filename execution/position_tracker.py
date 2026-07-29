@@ -146,6 +146,9 @@ class PositionTracker:
     def get_open_count(self) -> int:
         return len(self._open_positions)
 
+    def get_open_positions(self) -> list[Trade]:
+        return list(self._open_positions.values())
+
     def get_daily_pnl(self) -> float:
         self._reset_daily_if_needed()
         return self._daily_pnl

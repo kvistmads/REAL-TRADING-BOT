@@ -68,6 +68,10 @@ reflection:
     include_git_diff: true
     include_profiling: true
 
+  research:                           # Phase 5 — Research Layer (Del A)
+    enabled: true                     # berig Loop A/B med curated viden + backtest-baseline
+    web_search: false                 # slå urllib web-søgning til (best-effort, netværksafhængig)
+
   confidence_gate:
     auto_apply_threshold: 0.85        # >= dette: auto-applies (hvis n >= min_sample)
     telegram_threshold: 0.65          # >= dette: send til Telegram til godkendelse

@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REAL TRADING BOT — Dashboard</title>
+<!--
+  Statisk dashboard. Poller bot_status.json (skrevet af status_writer.py fra engine-loopet)
+  hvert 15. sekund. Serveres nemmest ved siden af JSON-filen:
+
+      .venv/bin/python -m http.server 8000
+      # åbn http://localhost:8000/dashboard.html
+
+  (fetch af bot_status.json virker ikke fra file:// i de fleste browsere pga. CORS.)
+  Uden en gyldig bot_status.json vises DEMO DATA, så layoutet altid kan ses.
+-->
+<style>
+  :root {
+    --bg: #0b0e14; --panel: #141922; --panel-2: #1b2130; --border: #262d3d;
+    --text: #e6e9ef; --muted: #8b94a7; --green: #29d391; --red: #ff5c6c;
+    --amber: #ffb454; --blue: #4aa3ff; --accent: #7c5cff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  .spacer { flex: 1; }
+  .badge { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--border); }
+  .badge.dry_run { background: rgba(74,163,255,.12); color: var(--blue); border-color: rgba(74,163,255,.3); }
+  .badge.live { background: rgba(255,92,108,.12); color: var(--red); border-color: rgba(255,92,108,.3); }
+  .badge.demo { background: rgba(255,180,84,.14); color: var(--amber); border-color: rgba(255,180,84,.35); }
+  .muted { color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .kpi { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .kpi .label { color: var(--muted); font-size: 12px; }
+  .kpi .value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+  .pos { color: var(--green); } .neg { color: var(--red); } .flat { color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  tbody tr:hover { background: var(--panel-2); }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { padding: 4px 10px; border-radius: 8px; font-size: 12px; border: 1px solid var(--border); background: var(--panel-2); }
+  .chip.on { color: var(--green); border-color: rgba(41,211,145,.3); }
+  .chip.off { color: var(--muted); }
+  .side-long { color: var(--green); } .side-short { color: var(--red); }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 720px) { .grid-2 { grid-template-columns: 1fr; } body { padding: 14px; } }
+  .empty { color: var(--muted); padding: 10px 0; }
+  code { background: var(--panel-2); padding: 1px 6px; border-radius: 5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>REAL TRADING BOT</h1>
+    <span id="mode-badge" class="badge demo">DEMO DATA</span>
+    <span id="status-text" class="muted"></span>
+    <div class="spacer"></div>
+    <span class="muted">Opdateret: <span id="updated">—</span></span>
+  </header>
+
+  <div class="panel">
+    <h2>Portefølje</h2>
+    <div id="kpis" class="kpis"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Gates &amp; Regime</h2>
+    <div id="gates" class="chips"></div>
+    <div id="regime" class="chips" style="margin-top:12px;"></div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <h2>Åbne positioner</h2>
+      <div id="positions"></div>
+    </div>
+    <div class="panel">
+      <h2>Strategier</h2>
+      <div id="strategies"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Seneste trades</h2>
+    <div id="trades"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Reflection Loops</h2>
+    <div id="loop-c"></div>
+  </div>
+
+  <p class="muted" style="text-align:center;">
+    Poller <code>bot_status.json</code> hvert 15. sekund · start engine med
+    <code>.venv/bin/python main.py</code>
+  </p>
+</div>
+
+<script>
+const DEMO = {
+  updated_at: null, mode: "dry_run", status: "DEMO",
+  portfolio: { total_value: 100, cash: 100, open_pnl: 0, daily_pnl: 0, total_pnl: 0,
+    total_pnl_pct: 0, win_count: 0, loss_count: 0, profit_factor: null,
+    signals_today: 0, open_positions: 0 },
+  positions: [], recent_trades: [],
+  regime: { "BTC/USDT": "trending", "ETH/USDT": "sideways" },
+  gates: { confidence: true, regime: true, risk: true, confluence: false, dry_run: true, sandbox: true },
+  strategies: {}, reflection: { loop_c: { total_signals: 0, accuracy_by_symbol: {}, last_signal: null } },
+};
+
+const fmt = (v, d = 2) => (v === null || v === undefined || isNaN(v)) ? "—" : Number(v).toFixed(d);
+const cls = (v) => v > 0 ? "pos" : (v < 0 ? "neg" : "flat");
+const sign = (v, d = 2) => (v > 0 ? "+" : "") + fmt(v, d);
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+function renderHeader(d, isDemo) {
+  const badge = document.getElementById("mode-badge");
+  if (isDemo) { badge.className = "badge demo"; badge.textContent = "DEMO DATA"; }
+  else { badge.className = "badge " + (d.mode === "live" ? "live" : "dry_run"); badge.textContent = (d.mode || "?").toUpperCase(); }
+  document.getElementById("status-text").textContent = isDemo ? "(ingen bot_status.json fundet)" : (d.status || "");
+  document.getElementById("updated").textContent = d.updated_at ? new Date(d.updated_at).toLocaleString("da-DK") : "—";
+}
+
+function renderKpis(p) {
+  const pf = (p.profit_factor === null || p.profit_factor === undefined) ? "∞/—" : fmt(p.profit_factor, 2);
+  const cards = [
+    ["Total værdi", "$" + fmt(p.total_value), ""],
+    ["Total P&L", sign(p.total_pnl) + " (" + sign(p.total_pnl_pct) + "%)", cls(p.total_pnl)],
+    ["Dagens P&L", sign(p.daily_pnl), cls(p.daily_pnl)],
+    ["Åben P&L", sign(p.open_pnl), cls(p.open_pnl)],
+    ["Win / Loss", (p.win_count ?? 0) + " / " + (p.loss_count ?? 0), ""],
+    ["Profit factor", pf, ""],
+    ["Signaler i dag", p.signals_today ?? 0, ""],
+    ["Åbne positioner", p.open_positions ?? 0, ""],
+  ];
+  document.getElementById("kpis").innerHTML = cards.map(([label, value, c]) =>
+    `<div class="kpi"><div class="label">${label}</div><div class="value ${c}">${value}</div></div>`).join("");
+}
+
+function renderGates(g) {
+  const order = [["dry_run", "Dry-run"], ["sandbox", "Sandbox"], ["risk", "Risk gate"],
+    ["regime", "Regime gate"], ["confluence", "Confluence"], ["confidence", "Confidence"]];
+  document.getElementById("gates").innerHTML = order.map(([k, label]) =>
+    `<span class="chip ${g[k] ? "on" : "off"}">${label}: ${g[k] ? "ON" : "OFF"}</span>`).join("");
+}
+
+function renderRegime(r) {
+  const keys = Object.keys(r || {});
+  document.getElementById("regime").innerHTML = keys.length
+    ? keys.map(k => `<span class="chip">${esc(k)}: <b>${esc(r[k])}</b></span>`).join("")
+    : `<span class="empty">Ingen regime-data endnu.</span>`;
+}
+
+function renderPositions(rows) {
+  const el = document.getElementById("positions");
+  if (!rows || !rows.length) { el.innerHTML = `<div class="empty">Ingen åbne positioner.</div>`; return; }
+  el.innerHTML = `<table><thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Nu</th><th>P&L</th></tr></thead><tbody>` +
+    rows.map(p => `<tr><td>${esc(p.symbol)} <span class="muted">${esc(p.strategy_id)}</span></td>
+      <td class="side-${esc(p.side)}">${esc(p.side)}</td><td>${fmt(p.entry_price, 4)}</td>
+      <td>${fmt(p.current_price, 4)}</td>
+      <td class="${cls(p.unrealized_pnl)}">${sign(p.unrealized_pnl)} (${sign(p.unrealized_pnl_pct)}%)</td></tr>`).join("") +
+    `</tbody></table>`;
+}
+
+function renderStrategies(s) {
+  const el = document.getElementById("strategies");
+  const keys = Object.keys(s || {});
+  if (!keys.length) { el.innerHTML = `<div class="empty">Ingen lukkede trades endnu.</div>`; return; }
+  el.innerHTML = `<table><thead><tr><th>Strategi</th><th>Trades</th><th>Win%</th><th>P&L</th></tr></thead><tbody>` +
+    keys.map(k => `<tr><td>${esc(k)}</td><td>${s[k].trades}</td>
+      <td>${fmt((s[k].win_rate ?? 0) * 100, 1)}%</td>
+      <td class="${cls(s[k].total_pnl)}">${sign(s[k].total_pnl)}</td></tr>`).join("") +
+    `</tbody></table>`;
+}
+
+function renderTrades(rows) {
+  const el = document.getElementById("trades");
+  if (!rows || !rows.length) { el.innerHTML = `<div class="empty">Ingen lukkede trades endnu.</div>`; return; }
+  el.innerHTML = `<table><thead><tr><th>Symbol</th><th>Strategi</th><th>Side</th><th>Entry</th><th>Exit</th><th>P&L%</th><th>Tid</th></tr></thead><tbody>` +
+    rows.slice(0, 20).map(t => `<tr><td>${esc(t.symbol)}</td><td class="muted">${esc(t.strategy_id)}</td>
+      <td class="side-${esc(t.side)}">${esc(t.side)}</td><td>${fmt(t.entry_price, 4)}</td>
+      <td>${fmt(t.exit_price, 4)}</td><td class="${cls(t.pnl_pct)}">${sign(t.pnl_pct)}%</td>
+      <td class="muted">${t.exit_time ? new Date(t.exit_time).toLocaleString("da-DK") : "—"}</td></tr>`).join("") +
+    `</tbody></table>`;
+}
+
+function renderLoopC(reflection) {
+  const c = (reflection && reflection.loop_c) || {};
+  const acc = c.accuracy_by_symbol || {};
+  const symbols = Object.keys(acc);
+  const ls = c.last_signal;
+  let html = `<h2 style="color:var(--accent);">Loop C — News Intelligence</h2>`;
+  html += `<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));">
+    <div class="kpi"><div class="label">Shadow signals</div><div class="value">${c.total_signals ?? 0}</div></div>
+    <div class="kpi"><div class="label">Samlet accuracy</div><div class="value">${c.accuracy != null ? fmt(c.accuracy * 100, 0) + "%" : "—"}</div></div>
+  </div>`;
+  html += `<h2 style="margin-top:16px;">Accuracy pr. symbol (≥10 signals)</h2>`;
+  html += symbols.length
+    ? `<div class="chips">` + symbols.map(s => `<span class="chip">${esc(s)}: <b>${fmt(acc[s] * 100, 0)}%</b></span>`).join("") + `</div>`
+    : `<div class="empty">Endnu ingen symboler med ≥10 evaluerede signals.</div>`;
+  html += `<h2 style="margin-top:16px;">Seneste shadow signal</h2>`;
+  html += ls
+    ? `<div class="chips"><span class="chip">${esc(ls.symbol)}</span>
+       <span class="chip side-${ls.direction === "up" ? "long" : "short"}">${esc(ls.direction)}</span>
+       <span class="chip">conf ${fmt(ls.confidence, 2)}</span>
+       <span class="chip muted">${ls.ts ? new Date(ls.ts).toLocaleString("da-DK") : ""}</span></div>`
+    : `<div class="empty">Ingen shadow signals endnu.</div>`;
+  document.getElementById("loop-c").innerHTML = html;
+}
+
+function render(d, isDemo) {
+  renderHeader(d, isDemo);
+  renderKpis(d.portfolio || {});
+  renderGates(d.gates || {});
+  renderRegime(d.regime || {});
+  renderPositions(d.positions || []);
+  renderStrategies(d.strategies || {});
+  renderTrades(d.recent_trades || []);
+  renderLoopC(d.reflection || {});
+}
+
+async function refresh() {
+  try {
+    const res = await fetch("bot_status.json?_=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    render(await res.json(), false);
+  } catch (e) {
+    render(DEMO, true);
+  }
+}
+
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>
