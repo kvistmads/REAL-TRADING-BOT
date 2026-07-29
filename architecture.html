@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>REAL TRADING BOT — Architecture</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.6.1/mermaid.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #080c16;
+  color: #c9d8f0;
+  font-family: 'SF Mono', 'Fira Code', ui-monospace, 'Cascadia Code', monospace;
+  min-height: 100vh;
+  padding: 32px;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+h1 {
+  font-size: 22px;
+  font-weight: 800;
+  color: #f0c040;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+}
+.version {
+  font-size: 11px;
+  color: #374151;
+  letter-spacing: 1px;
+  padding: 2px 8px;
+  background: #111827;
+  border: 1px solid #1e2d3d;
+  border-radius: 4px;
+}
+
+.phase-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+.phase {
+  font-size: 10px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.phase.done { background: #10b98115; color: #34d399; border: 1px solid #10b98135; }
+.phase.active { background: #3b82f615; color: #60a5fa; border: 1px solid #3b82f635; }
+.phase.pending { background: #1a2535; color: #374151; border: 1px solid #1e2d3d; }
+
+.stats-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+}
+.stat {
+  background: #0d1520;
+  border: 1px solid #1a2535;
+  border-radius: 8px;
+  padding: 10px 16px;
+  min-width: 100px;
+}
+.stat-label { font-size: 9px; color: #374151; letter-spacing: 2px; text-transform: uppercase; }
+.stat-value { font-size: 20px; font-weight: 700; color: #f0c040; margin-top: 3px; }
+.stat-sub { font-size: 10px; color: #4b5563; margin-top: 2px; }
+
+.diagram-container {
+  background: #050810;
+  border: 1px solid #151f2e;
+  border-radius: 12px;
+  padding: 40px 32px;
+  overflow: auto;
+  position: relative;
+}
+
+.diagram-label {
+  position: absolute;
+  top: 14px;
+  left: 20px;
+  font-size: 9px;
+  color: #1e2d3d;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.mermaid {
+  max-width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.mermaid svg {
+  max-width: 100%;
+  height: auto !important;
+}
+
+footer {
+  margin-top: 24px;
+  font-size: 10px;
+  color: #1e2d3d;
+  text-align: center;
+  letter-spacing: 1px;
+}
+.nav-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.nav-link {
+  font-size: 10px;
+  font-weight: 600;
+  color: #4b5563;
+  text-decoration: none;
+  padding: 4px 10px;
+  border: 1px solid #1e2d3d;
+  border-radius: 5px;
+  letter-spacing: 0.5px;
+  transition: all 0.15s;
+}
+.nav-link:hover { color: #f0c040; border-color: #f0c040; }
+.refresh-info {
+  font-size: 10px;
+  color: #1e2d3d;
+  margin-left: auto;
+  letter-spacing: 0.5px;
+}
+
+.legend {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: #4b5563;
+}
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+</style>
+</head>
+<body>
+
+<div class="nav-bar">
+  <a href="dashboard.html" class="nav-link">📊 Dashboard</a>
+  <span class="refresh-info">Auto-opdatering hvert 5. min · Sidst: <span id="last-refresh">—</span></span>
+</div>
+
+<header>
+  <h1>REAL TRADING BOT</h1>
+  <span class="version">v5.0 · Phase 4 ✅</span>
+</header>
+
+<div class="phase-bar">
+  <span class="phase done">✅ Phase 1 — Core Engine + Tests</span>
+  <span class="phase done">✅ Phase 2 — Regime Gate + Telegram</span>
+  <span class="phase done">✅ Phase 3 — Composite Strategies + Forex fix</span>
+  <span class="phase done">✅ Phase 4 — Reflection Loops + AI Analyst</span>
+  <span class="phase active">🔄 Phase 5 — Alembic · A/B hook · Live Trading</span>
+</div>
+
+<div class="stats-row">
+  <div class="stat">
+    <div class="stat-label">Tests</div>
+    <div class="stat-value">92</div>
+    <div class="stat-sub">alle grønne ✅</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Handelspar</div>
+    <div class="stat-value">6</div>
+    <div class="stat-sub">BTC ETH SOL · EUR GBP · XAU</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Strategier</div>
+    <div class="stat-value">3</div>
+    <div class="stat-sub">composite · multi-signal</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Kapital</div>
+    <div class="stat-value">$100</div>
+    <div class="stat-sub">5 USDT/trade · max 4 åbne</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Bedste PF</div>
+    <div class="stat-value">2.23</div>
+    <div class="stat-sub">XAU × trend_momentum</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Bedste Sharpe</div>
+    <div class="stat-value">1.35</div>
+    <div class="stat-sub">XAU · WR 54.5%</div>
+  </div>
+</div>
+
+<div class="diagram-container">
+  <div class="diagram-label">SYSTEM ARCHITECTURE · DATAFLOW</div>
+  <div class="mermaid">
+flowchart TD
+    main["🎯 <b>main.py</b><br/>APScheduler · config.yaml"]
+
+    subgraph DATA["📡 DATA INGESTION"]
+        crypto["<b>Binance ccxt</b><br/>BTC/USDT · ETH/USDT · SOL/USDT<br/>4h bars · ~2 år historik"]
+        forex["<b>yfinance CME</b><br/>6E=F (EUR/USD) · 6B=F (GBP/USD)<br/>FX Futures"]
+        gold["<b>yfinance</b><br/>GC=F (XAU/USD)<br/>CME Gold Futures"]
+    end
+
+    regime["📊 <b>REGIME DETECTION</b><br/>trend_strength_scale: crypto 0.05 · forex 0.01 · gold 0.03<br/>cross_strength signal · BULL / BEAR / NEUTRAL"]
+
+    subgraph STRAT["🧠 STRATEGIES"]
+        tm["<b>trend_momentum</b><br/>✅ XAU PF 2.23 · Sharpe 1.35"]
+        rc["<b>reversal_context</b><br/>mean-reversion · kontext-filter"]
+        vb["<b>volatility_breakout</b><br/>ATR-breakout · volume-confirm"]
+    end
+
+    subgraph GATES["🛡️ GATE SYSTEM"]
+        cg["<b>confidence_gate</b><br/>6 hard-coded guardrails<br/>auto_apply · telegram · report"]
+        rg["<b>regime_gate</b> — ON"]
+        rig["<b>risk_gate</b> — ON"]
+        conf["<b>confluence_gate</b> — OFF"]
+    end
+
+    engine["⚙️ <b>TRADING ENGINE</b><br/>5 USDT/trade · max 4 åbne · 1x leverage<br/>SL/TP: Crypto 10/20% · Forex 1.5/3% · Gold 3/6%<br/><i>dry_run: true · sandbox: true</i>"]
+
+    exchange["🏦 <b>MEXC Exchange</b><br/>sandbox API ↔ live API<br/>(Phase 5: API keys + live mode)"]
+
+    db[("🗄️ <b>SQLite DB</b><br/>trades · Observations<br/>ABExperiment · A/B arms")]
+    chroma[("🔵 <b>ChromaDB</b><br/>vector memory<br/>patterns + reflection")]
+
+    subgraph REFL["🔄 REFLECTION LOOPS"]
+        nightly["<b>Loop A · nightly.py</b><br/>3-lag trade-analyse<br/>→ auto_apply / telegram / rapport"]
+        weekly["<b>Loop B · weekly.py</b><br/>arkitektur + performance<br/>rapport-only"]
+    end
+
+    ai["🤖 <b>Anthropic Analyst</b><br/>claude-sonnet · offline fallback<br/>analyse + parameter-forslag"]
+    tg["📱 <b>Telegram</b><br/>trade-alerts · daglige rapporter<br/>confidence-gate notifikationer"]
+
+    main --> crypto & forex & gold
+    crypto --> regime
+    forex --> regime
+    gold --> regime
+    regime --> tm & rc & vb
+    tm --> cg
+    rc --> cg
+    vb --> cg
+    cg --> rg
+    rg --> rig
+    conf -.->|OFF| rig
+    rig --> engine
+    engine --> exchange
+    engine --> db
+    engine --> tg
+    db --> nightly
+    db --> weekly
+    chroma --> ai
+    ai --> nightly
+    ai --> weekly
+    nightly -->|parameter updates| tm & rc & vb
+    weekly -->|arkitektur feedback| main
+    nightly --> tg
+    weekly --> tg
+    nightly --> db
+    weekly --> db
+  </div>
+</div>
+
+<footer>
+  REAL TRADING BOT · kvistmads@gmail.com · Genereret: <span id="gen-time"></span>
+</footer>
+
+<script>
+const now = new Date();
+document.getElementById('gen-time').textContent = now.toLocaleString('da-DK');
+document.getElementById('last-refresh').textContent = now.toLocaleTimeString('da-DK');
+
+// Auto-refresh hvert 5. minut (arkitektur er semi-statisk)
+setTimeout(() => location.reload(), 5 * 60 * 1000);
+
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'dark',
+  themeVariables: {
+    background: '#050810',
+    mainBkg: '#0d1520',
+    nodeBorder: '#1e3a5f',
+    clusterBkg: '#0a1220',
+    clusterBorder: '#1e3a5f',
+    titleColor: '#c9d8f0',
+    edgeLabelBackground: '#0d1520',
+    fontFamily: 'SF Mono, Fira Code, ui-monospace, monospace',
+    fontSize: '12px',
+    lineColor: '#2a4a6b',
+    primaryColor: '#0d1e35',
+    primaryTextColor: '#c9d8f0',
+    primaryBorderColor: '#1e3a5f',
+    secondaryColor: '#091626',
+    tertiaryColor: '#050d1a',
+  },
+  flowchart: {
+    curve: 'basis',
+    padding: 20,
+    nodeSpacing: 40,
+    rankSpacing: 50,
+    htmlLabels: true,
+  }
+});
+</script>
+</body>
+</html>
