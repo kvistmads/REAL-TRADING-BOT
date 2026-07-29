@@ -43,7 +43,9 @@ def print_metrics(metrics: dict, meta: dict) -> None:
 def save_csv(trades: list[dict], meta: dict) -> Path:
     """Gem alle trades til CSV under backtest_results/."""
     RESULTS_DIR.mkdir(exist_ok=True)
-    filename = f"{meta['strategy']}_{meta['symbol']}_{meta['timeframe']}.csv"
+    # Symboler er på formen BTC/USDT — skråstregen ville ellers blive læst som undermappe.
+    symbol = meta["symbol"].replace("/", "-")
+    filename = f"{meta['strategy']}_{symbol}_{meta['timeframe']}.csv"
     path = RESULTS_DIR / filename
 
     fields = [

@@ -135,7 +135,10 @@ function renderHeader(d, isDemo) {
 }
 
 function renderKpis(p) {
-  const pf = (p.profit_factor === null || p.profit_factor === undefined) ? "∞/—" : fmt(p.profit_factor, 2);
+  // Engine sender null for profit factor når der ingen tabende trades er — det dækker
+  // både "ingen trades endnu" og "kun vindere". Win/loss-tællerne skiller de to ad.
+  const pfMissing = p.profit_factor === null || p.profit_factor === undefined;
+  const pf = !pfMissing ? fmt(p.profit_factor, 2) : (p.win_count > 0 ? "∞" : "—");
   const cards = [
     ["Total værdi", "$" + fmt(p.total_value), ""],
     ["Total P&L", sign(p.total_pnl) + " (" + sign(p.total_pnl_pct) + "%)", cls(p.total_pnl)],
