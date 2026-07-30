@@ -23,9 +23,16 @@ Registry (`strategies/registry.py`) auto-discoverer alle `BaseStrategy`-subklass
 `strategies/`; kun de 3 ovenstående filer findes, så kun de 3 registreres.
 Aktivering + `min_confidence: 0.65` styres i `config.yaml`.
 
+## Datakilder (live + backtest)
+Både `data/fetcher.py` (live) og `backtest/runner.py` bruger Binance (ccxt) til crypto og
+yfinance til forex/gold. Symbol-mappingen `YFINANCE_SYMBOL_MAP` (`EUR/USD`→`6E=F`,
+`GBP/USD`→`6B=F`, `XAU/USD`→`GC=F`) er defineret ÉT sted — `data/fetcher.py` — og importeres
+af runneren, så de to aldrig kan divergere. CME-futures frem for spot fordi yfinance-spot har
+100% nul-volume og nulstiller volume-gates. yfinance har ingen 4h-barer: begge sider henter 1h
+og resampler. MT5 (Windows-only) bruges nu KUN til live tick-priser; uden den falder
+`DataFetcher.get_latest_price()` tilbage på seneste 1h-close.
+
 ## Backtest
-`backtest/runner.py` henter data fra to kilder: Binance (ccxt) til crypto,
-yfinance til forex/gold (`EUR/USD`, `GBP/USD`, `XAU/USD`).
 
 ```bash
 # Ét symbol
@@ -71,9 +78,10 @@ ingen fejl) — så `--dry-run` virker uden nøgle.
   `BacktestResult` via `save_results_to_db` (win_rate/max_drawdown normaliseret til fraktioner,
   profit_factor=inf → None). CSV skrives stadig som før.
 - **Dashboard (`dashboard.html` + `status_writer.py`)**: engine kalder `write_status` →
-  `bot_status.json` (atomisk skriv) ved opstart + throttlet til hvert 60. sek. (`_STATUS_INTERVAL`).
-  Dashboardet er statisk HTML der poller JSON'en (server med `python -m http.server`; viser
-  DEMO DATA hvis filen mangler). Loop C-sektion viser shadow-signal-accuracy pr. symbol.
+  `bot_status.json` (atomisk skriv) ved opstart + hvert 60. sek. fra position monitor-loopet
+  (se Phase 6). Dashboardet er statisk HTML der poller JSON'en (server med
+  `python -m http.server`; viser DEMO DATA hvis filen mangler). Loop C-sektion viser
+  shadow-signal-accuracy pr. symbol.
 - **News confirmation-hook (Del C)**: `core/engine._apply_news_confirmation` → ren logik i
   `reflection/news/confirmation.py`. Justerer signal-confidence (+boost ved match / -damp ved
   konflikt) ud fra `get_symbol_accuracy` + seneste shadow signal. **Default OFF** via
@@ -83,8 +91,21 @@ ingen fejl) — så `--dry-run` virker uden nøgle.
   for SQLite. `create_all` er stadig bootstrap (tests + nye tabeller); NYE KOLONNER på
   eksisterende tabeller kræver `alembic upgrade head`. Eksisterende DB'er stamps: `alembic stamp head`.
 
-## Ikke bygget endnu (Phase 6+)
-Live trading + MEXC API-keys (Phase 6), confluence-gate (forbliver OFF),
+## Phase 6 — To engine-loops (Del A+B, `PRD_PHASE6_FIXES.md`)
+Engine'en kører nu to parallelle loops via `asyncio.gather` i `start()`:
+- `_tick_loop()` — signal-generering hvert `timeframes.primary` (4h): OHLCV, indikatorer,
+  strategier, gates, trade-åbning. Skriver IKKE dashboard-status.
+- `_position_monitor_loop()` — sover 60 sek. pr. runde: skriver `bot_status.json` hver runde
+  (`STATUS_WRITE_INTERVAL`) og kalder `_check_positions_fast()` hver time
+  (`POSITION_CHECK_INTERVAL`), som henter pris for de unikke symboler med åbne positioner og
+  evaluerer SL/TP. `_apply_sl_tp()` deles af begge loops. `stop()` AFLYSER tasks — ellers
+  hænger nedlukningen i op til 4 timers sleep.
+
+Priser hentes ét sted: `DataFetcher.get_latest_price()` (crypto → ccxt-ticker, forex → MT5-tick
+eller seneste yfinance-1h-close). `self._last_prices` fodrer urealiseret PnL i dashboardet.
+
+## Ikke bygget endnu (Phase 7+)
+Live trading + MEXC API-keys (Phase 7), confluence-gate (forbliver OFF),
 FastAPI-dashboard (HTML-dashboardet dækker behovet), Twitter/X, multi-exchange.
 EMA Crossover / SR Breakout som standalone (absorberet i composites);
 webhook-server til Telegram-godkendelse (long-polling `getUpdates` bruges).

@@ -16,26 +16,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backtest import metrics as metrics_mod  # noqa: E402
 from backtest import report  # noqa: E402
+from data.fetcher import YFINANCE_SYMBOL_MAP as YFINANCE_MAP  # noqa: E402
 from data.indicators import add_all  # noqa: E402
 from strategies.base import BaseStrategy  # noqa: E402
 from strategies.registry import load_strategies  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# ccxt-symbol → yfinance-ticker for forex/gold. Symboler der IKKE står her
-# hentes fra Binance som crypto.
-#
-# Forex bruger CME-valutafutures (6E=F/6B=F), IKKE spot (EURUSD=X/GBPUSD=X):
-# yfinance-spot returnerer 100% nul-volume, hvilket strukturelt nulstiller
-# volume-gates i reversal_context + volatility_breakout. Futures leverer ~96%
-# non-zero volume og en pris-skala der matcher spot (6E≈EUR/USD, 6B≈GBP/USD),
-# præcis som guld allerede bruger GC=F. Live-forex henter i stedet MT5
-# tick_volume (data/mt5_fetcher.py); futures-volumen er backtestens proxy.
-YFINANCE_MAP = {
-    "EUR/USD": "6E=F",
-    "GBP/USD": "6B=F",
-    "XAU/USD": "GC=F",
-}
+# Symbol-mappingen (forex/gold → CME-futures) deles med live-fetcheren, så de to
+# datakilder ikke kan divergere — se data/fetcher.YFINANCE_SYMBOL_MAP for hvorfor
+# det er futures og ikke spot. Symboler der IKKE står der hentes fra Binance.
 
 
 # ---------------------------------------------------------------------------
