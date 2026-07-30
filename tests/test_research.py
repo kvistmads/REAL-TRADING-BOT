@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from backtest.runner import _to_db_record, save_results_to_db
 from core.database import BacktestResult, Base, ShadowSignal
+from core.time_utils import utc_now
 from reflection.news import accuracy_tracker
 from reflection.news.confirmation import apply_news_confirmation
 from reflection.research import backtest_reader, strategy_db, web_searcher
@@ -37,7 +38,7 @@ def _signal(side: str = "long", confidence: float = 0.70) -> Signal:
 
 
 def _seed_shadow(session, *, symbol="BTC/USDT", n_eval=12, correct=True, predicted="up") -> None:
-    now = datetime.utcnow()
+    now = utc_now()
     for i in range(n_eval):
         session.add(
             ShadowSignal(
@@ -191,8 +192,8 @@ def test_news_confirmation_hook_damps_confidence_on_conflict(session):
     session.add(
         ShadowSignal(
             symbol="BTC/USDT", predicted_direction="down", confidence=0.8, horizon_hours=24,
-            eval_at=datetime.utcnow() + timedelta(hours=24), price_at_signal=100.0,
-            created_at=datetime.utcnow() + timedelta(minutes=5),
+            eval_at=utc_now() + timedelta(hours=24), price_at_signal=100.0,
+            created_at=utc_now() + timedelta(minutes=5),
         )
     )
     session.commit()

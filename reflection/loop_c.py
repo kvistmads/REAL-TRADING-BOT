@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sqlalchemy import select
 
 from core.database import ShadowSignal, SignalLog, init_sync_db, sync_session_maker
+from core.time_utils import utc_now
 from reflection.analyst import ReflectionAnalyst
 from reflection.chromadb_store import ObservationStore
 from reflection.news import accuracy_tracker, shadow_trader
@@ -91,7 +92,7 @@ def run_loop_c(
         logger.info("news_intelligence.enabled=false — springer Loop C over.")
         return {"skipped": True}
 
-    now = now or datetime.utcnow()
+    now = now or utc_now()
     if session_factory is None:
         init_sync_db()
         session_factory = sync_session_maker

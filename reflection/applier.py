@@ -17,11 +17,12 @@ import json
 import logging
 import shutil
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 import yaml
+
+from core.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ class ParameterApplier:
         obs.auto_applied = True
 
         record = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utc_now().isoformat(),
             "obs_id": getattr(obs, "id", None),
             "strategy_id": obs.strategy_id,
             "parameter": obs.parameter,

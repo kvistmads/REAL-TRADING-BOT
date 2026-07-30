@@ -19,6 +19,7 @@ import pandas as pd
 from sqlalchemy import func, select
 
 from core.database import ShadowSignal, Trade
+from core.time_utils import utc_now
 
 _ADX_RE = re.compile(r"ADX\s*=\s*(\d+(?:\.\d+)?)")
 
@@ -58,7 +59,7 @@ def count_closed_trades(session) -> int:
 
 def extract_closed_trades(session, lookback_days: int) -> pd.DataFrame:
     """Hent lukkede trades fra de seneste N dage med fuld kontekst som DataFrame."""
-    cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+    cutoff = utc_now() - timedelta(days=lookback_days)
     trades = (
         session.execute(
             select(Trade).where(
@@ -167,7 +168,7 @@ def extract_shadow_signal_performance(session, lookback_days: int) -> pd.DataFra
     korrelere news-signal-accuracy med strategiernes performance i samme perioder.
     Kun signaler der er blevet evalueret (correct != None) tages med.
     """
-    cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+    cutoff = utc_now() - timedelta(days=lookback_days)
     signals = (
         session.execute(
             select(ShadowSignal).where(

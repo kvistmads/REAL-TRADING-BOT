@@ -16,6 +16,8 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
+from core.time_utils import utc_now
+
 DATABASE_URL = "sqlite+aiosqlite:///trading_bot.db"
 # Synkron URL til reflection-loopsene (Loop A/B). De kører som selvstændige
 # cron-jobs og bruger blocking-klienter (Anthropic, ChromaDB), så en synkron
@@ -101,7 +103,7 @@ class Observation(Base):
     __tablename__ = "observations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     loop: Mapped[str] = mapped_column(String, nullable=False)  # "nightly" | "weekly"
     observation_type: Mapped[str] = mapped_column(String, nullable=False)
     strategy_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -124,7 +126,7 @@ class ABExperiment(Base):
     __tablename__ = "ab_experiments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     observation_id: Mapped[int] = mapped_column(ForeignKey("observations.id"), nullable=False)
     strategy_id: Mapped[str] = mapped_column(String, nullable=False)
     parameter: Mapped[str] = mapped_column(String, nullable=False)
@@ -151,7 +153,7 @@ class ShadowSignal(Base):
     __tablename__ = "shadow_signals"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     symbol: Mapped[str] = mapped_column(String, nullable=False)  # "BTC/USDT", "EUR/USD" osv.
     predicted_direction: Mapped[str] = mapped_column(String, nullable=False)  # "up"|"down"|"neutral"
     confidence: Mapped[float] = mapped_column(Float, nullable=False)  # 0.0-1.0
@@ -177,7 +179,7 @@ class PromotionAlert(Base):
     __tablename__ = "news_promotion_alerts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     symbol: Mapped[str] = mapped_column(String, nullable=False)
     source: Mapped[str] = mapped_column(String, nullable=False)
     accuracy: Mapped[float] = mapped_column(Float, nullable=False)
@@ -196,7 +198,7 @@ class BacktestResult(Base):
     __tablename__ = "backtest_results"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    run_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    run_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     strategy_id: Mapped[str] = mapped_column(String, nullable=False)
     symbol: Mapped[str] = mapped_column(String, nullable=False)
     period_start: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

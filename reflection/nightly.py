@@ -16,7 +16,6 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime
 
 import yaml
 from dotenv import load_dotenv
@@ -25,6 +24,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.database import Observation, init_sync_db, sync_session_maker
+from core.time_utils import utc_now
 from reflection import confidence_gate, extractor
 from reflection.ab_tracker import ABTracker
 from reflection.analyst import ReflectionAnalyst
@@ -195,7 +195,7 @@ def run_nightly(
         logger.info("reflection.enabled=false — springer nightly over.")
         return {"skipped": True}
 
-    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    date_str = utc_now().strftime("%Y-%m-%d")
     if session_factory is None:
         init_sync_db()
         session_factory = sync_session_maker
@@ -213,7 +213,7 @@ def run_nightly(
         research_cfg = rcfg.get("research", {})
         if research_cfg.get("enabled", True):
             researcher = Researcher(enable_web=research_cfg.get("web_search", False), store=store)
-    period_str = datetime.utcnow().strftime("%B %Y")
+    period_str = utc_now().strftime("%B %Y")
     gate_cfg = _gate_cfg(rcfg)
     ab = ABTracker(
         significance_threshold=rcfg["ab_experiments"]["significance_threshold"],

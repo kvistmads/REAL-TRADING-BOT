@@ -13,6 +13,7 @@ from datetime import datetime
 from sqlalchemy import select
 
 from core.database import PromotionAlert, ShadowSignal
+from core.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ def evaluate_pending(session, price_fn=None, now: datetime | None = None) -> int
     price_at_signal). Signaler uden referencepris eller uden hentbar aktuel pris
     springes over (forbliver pending). Returnér antal evaluerede.
     """
-    now = now or datetime.utcnow()
+    now = now or utc_now()
     price_fn = price_fn or default_price_fn
     pending = (
         session.execute(

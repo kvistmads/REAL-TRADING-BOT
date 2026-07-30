@@ -8,6 +8,7 @@ from math import ceil
 import pandas as pd
 
 from core.exchange import ExchangeClient
+from core.time_utils import utc_now
 from data.mt5_fetcher import MT5Fetcher
 
 logger = logging.getLogger(__name__)
@@ -117,7 +118,7 @@ class DataFetcher:
 
         if cached_df is not None and cached_at is not None:
             tf_secs = _TIMEFRAME_SECONDS.get(timeframe, 3600)
-            age = (datetime.utcnow() - cached_at).total_seconds()
+            age = (utc_now() - cached_at).total_seconds()
             if age < tf_secs:
                 return cached_df
 
@@ -131,7 +132,7 @@ class DataFetcher:
         else:
             df = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
 
-        self._cache[key] = (df, datetime.utcnow())
+        self._cache[key] = (df, utc_now())
         logger.debug(f"Hentet {len(df)} bars for {symbol} {timeframe}")
         return df
 

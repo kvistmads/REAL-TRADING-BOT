@@ -18,6 +18,7 @@ from core.database import (
 )
 from core.exchange import ExchangeClient
 from core.notifications import TelegramNotifier
+from core.time_utils import utc_now
 from data.fetcher import DataFetcher
 from data.indicators import add_all
 from execution.ab_router import get_assignment, record_trade_arm
@@ -62,7 +63,7 @@ class TradingEngine:
         self._summary_hour = self._parse_summary_hour()
         # Dashboard-status (Phase 5 Del B): tælleren nulstilles ved døgnskift.
         self.signals_today = 0
-        self._signals_today_date = datetime.utcnow().date()
+        self._signals_today_date = utc_now().date()
         # Seneste kendte pris pr. symbol — opdateres af både tick- og monitor-loopet
         # og bruges til urealiseret PnL i bot_status.json.
         self._last_prices: dict[str, float] = {}
@@ -299,7 +300,7 @@ class TradingEngine:
             signal_metadata=signal.metadata,
             sl_price=signal.sl_price,
             tp_price=signal.tp_price,
-            timestamp=datetime.utcnow(),
+            timestamp=utc_now(),
             gate_passed=gate_passed,
             trade_id=trade_id,
         )
@@ -390,7 +391,7 @@ class TradingEngine:
     # ------------------------------------------------------------------
 
     def _reset_signals_if_needed(self) -> None:
-        today = datetime.utcnow().date()
+        today = utc_now().date()
         if today != self._signals_today_date:
             self.signals_today = 0
             self._signals_today_date = today
