@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from core.database import Base, Observation, PromotionAlert, ShadowSignal
+from core.time_utils import utc_now
 from reflection.news import accuracy_tracker, fetcher, shadow_trader
 from reflection.strategy_memory import StrategyMemory
 
@@ -47,7 +48,7 @@ def _headlines(*_a, **_kw):
 def _shadow(**kw) -> ShadowSignal:
     base = dict(
         symbol="BTC/USDT", predicted_direction="up", confidence=0.7, horizon_hours=24,
-        eval_at=datetime.utcnow() - timedelta(hours=1), price_at_signal=100.0,
+        eval_at=utc_now() - timedelta(hours=1), price_at_signal=100.0,
         news_summary="x", sentiment_scores={}, source="cryptopanic",
     )
     base.update(kw)

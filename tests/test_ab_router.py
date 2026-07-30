@@ -6,13 +6,12 @@ respekterer params-overrides uden at ændre default-adfærd.
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from core.database import ABExperiment, Base, Observation, Trade
+from core.time_utils import utc_now
 from execution import ab_router
 from execution.ab_router import ArmAssignment, get_assignment, record_trade_arm
 from strategies.reversal_context import ReversalContext
@@ -53,7 +52,7 @@ def _seed_trade(factory, **kw) -> str:
     base = dict(
         strategy_id="reversal_context", symbol="BTC/USDT", side="long",
         entry_price=100.0, sl_price=90.0, tp_price=120.0, quantity=1.0,
-        stake_amount=5.0, entry_time=datetime.utcnow(), status="open",
+        stake_amount=5.0, entry_time=utc_now(), status="open",
     )
     base.update(kw)
     with factory() as s:

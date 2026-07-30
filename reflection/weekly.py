@@ -24,7 +24,6 @@ import os
 import pstats
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -33,6 +32,7 @@ from dotenv import load_dotenv
 # Gør projekt-roden importerbar når scriptet køres direkte (python reflection/weekly.py).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.time_utils import utc_now
 from reflection.analyst import ReflectionAnalyst
 from reflection.reporter import TelegramReporter, write_weekly_report
 from reflection.research.researcher import Researcher
@@ -207,7 +207,7 @@ def run_weekly(config: dict, dry_run: bool = False) -> dict:
         logger.info("reflection.enabled=false — springer weekly over.")
         return {"skipped": True}
 
-    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    date_str = utc_now().strftime("%Y-%m-%d")
     wcfg = rcfg["weekly"]
     # I dry-run holder vi kørslen let: ingen profilering/coverage.
     include_profiling = wcfg.get("include_profiling", True) and not dry_run

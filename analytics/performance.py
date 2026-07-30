@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import StrategyPerformance, Trade
+from core.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ class PerformanceTracker:
         Kør dagligt (kl. 22:00). For hver strategi: beregn win_rate, avg_pnl,
         total_pnl, total_trades fra dagens lukkede trades → gem til strategy_performance.
         """
-        on = on or datetime.utcnow().date()
+        on = on or utc_now().date()
         start = datetime(on.year, on.month, on.day)
         end = start + timedelta(days=1)
 
@@ -61,7 +62,7 @@ class PerformanceTracker:
 
     async def get_summary(self, db_session: AsyncSession, days: int = 7) -> dict:
         """Aggregeret summary for de seneste N dage — bruges til Telegram daily summary."""
-        end = datetime.utcnow()
+        end = utc_now()
         start = end - timedelta(days=days)
 
         result = await db_session.execute(

@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, timedelta
 
 from core.database import ShadowSignal
+from core.time_utils import utc_now
 from reflection.news import fetcher
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ def generate_shadow_signal(
     (eller hvis analysten kører offline og intet svarer). Alle eksterne kald er
     injicerbare (fetch_fn/price_fn/analyst) så testen kan køre uden netværk.
     """
-    now = now or datetime.utcnow()
+    now = now or utc_now()
     fetch_fn = fetch_fn or fetcher.fetch_headlines
     headlines = fetch_fn(symbol, sources_cfg=sources_cfg)
     if not headlines:

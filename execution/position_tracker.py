@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import Trade, async_session_maker
+from core.time_utils import utc_now
 from strategies.base import Signal
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ class PositionTracker:
         self.config = config
         self._open_positions: dict[str, Trade] = {}
         self._daily_pnl: float = 0.0
-        self._daily_reset_date: str = datetime.utcnow().strftime("%Y-%m-%d")
+        self._daily_reset_date: str = utc_now().strftime("%Y-%m-%d")
 
     async def load_open_positions(self) -> None:
         from sqlalchemy import select
@@ -55,7 +55,7 @@ class PositionTracker:
             stake_amount=stake,
             pnl=None,
             pnl_pct=None,
-            entry_time=datetime.utcnow(),
+            entry_time=utc_now(),
             exit_time=None,
             status="open",
             gate_scores=gate_scores,
@@ -88,7 +88,7 @@ class PositionTracker:
         pnl_pct = (pnl / trade.stake_amount) * 100
 
         trade.exit_price = exit_price
-        trade.exit_time = datetime.utcnow()
+        trade.exit_time = utc_now()
         trade.status = "closed"
         trade.pnl = round(pnl, 4)
         trade.pnl_pct = round(pnl_pct, 2)
@@ -138,7 +138,7 @@ class PositionTracker:
         return closed
 
     def _reset_daily_if_needed(self) -> None:
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = utc_now().strftime("%Y-%m-%d")
         if today != self._daily_reset_date:
             self._daily_pnl = 0.0
             self._daily_reset_date = today

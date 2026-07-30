@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from core.database import ABExperiment, Base, Observation, Trade
+from core.time_utils import utc_now
 from reflection import confidence_gate, extractor, nightly
 from reflection.ab_tracker import ABTracker
 from reflection.applier import ParameterApplier
@@ -140,7 +141,7 @@ def _make_trade(**kw) -> Trade:
         strategy_id="trend_momentum", symbol="BTC/USDT", side="long",
         entry_price=100.0, exit_price=110.0, sl_price=90.0, tp_price=120.0,
         quantity=1.0, stake_amount=5.0, pnl=5.0, pnl_pct=10.0,
-        entry_time=datetime(2026, 7, 20, 9, 30), exit_time=datetime.utcnow(),
+        entry_time=datetime(2026, 7, 20, 9, 30), exit_time=utc_now(),
         status="closed",
         gate_scores={"regime": {"passed": True, "score": 1.0, "reason": "Trending market (ADX=27)"}},
         market_regime="trending",
@@ -250,7 +251,7 @@ class _DummyReporter:
 
 def _seed_trades(session_factory, n, *, strategy="trend_momentum", symbol="BTC/USDT",
                  hour=9, regime="trending", weeks_spread=0):
-    now = datetime.utcnow()
+    now = utc_now()
     with session_factory() as s:
         for i in range(n):
             exit_time = now - timedelta(weeks=(i % (weeks_spread + 1)))

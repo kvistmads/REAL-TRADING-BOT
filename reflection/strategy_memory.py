@@ -16,9 +16,10 @@ Best-effort: fejl i én kilde må aldrig vælte nightly — de logges og springe
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from core.database import ABExperiment, Observation
+from core.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ class StrategyMemory:
         Tom streng hvis der intet er at fortælle (så prompten ikke får en tom
         overskrift). Sorteret nyeste-først, max ``lookback_days`` tilbage.
         """
-        cutoff = datetime.utcnow() - timedelta(days=self.lookback_days)
+        cutoff = utc_now() - timedelta(days=self.lookback_days)
 
         applied = (
             session.query(Observation)

@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from datetime import datetime
 
 import ccxt.async_support as ccxt
 import pandas as pd
 
+from core.time_utils import utc_now
 from strategies.base import Signal
 
 logger = logging.getLogger(__name__)
@@ -81,7 +81,7 @@ class ExchangeClient:
             "price": None,
             "average": None,
             "status": "closed",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utc_now().isoformat(),
             "dry_run": True,
             "sl_price": sl_price,
             "tp_price": tp_price,
