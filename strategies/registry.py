@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import logging
 import pkgutil
 from pathlib import Path
 
 from strategies.base import BaseStrategy
+
+logger = logging.getLogger(__name__)
 
 
 class StrategyRegistry:
@@ -40,7 +43,9 @@ def load_strategies() -> StrategyRegistry:
                 if issubclass(obj, BaseStrategy) and obj is not BaseStrategy and hasattr(obj, "name"):
                     instance = obj()
                     registry.register(instance)
-        except Exception:
-            pass
+        except Exception as e:
+            # Fortsæt med de øvrige strategier, men lad være med at tabe fejlen på
+            # gulvet — ellers forsvinder en knækket strategi lydløst fra registeret.
+            logger.warning("Kunne ikke loade strategi-modul '%s': %s", module_name, e)
 
     return registry

@@ -41,7 +41,9 @@ _STRATEGY_IDS = ["trend_momentum", "reversal_context", "volatility_breakout"]
 
 logger = logging.getLogger(__name__)
 
-_SKIP_DIRS = {".venv", ".git", "__pycache__", ".pytest_cache", "backtest_results"}
+# .claude rummer agent-worktrees: en fuld kopi af repoet, som ellers ville
+# tælle hver modul med to gange og få kodebasen til at se duplikeret ud.
+_SKIP_DIRS = {".venv", ".git", "__pycache__", ".pytest_cache", "backtest_results", ".claude"}
 
 
 # ---------------------------------------------------------------------------

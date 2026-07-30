@@ -83,11 +83,21 @@ async def main() -> None:
     with open("config.yaml") as f:
         config = yaml.safe_load(f)
 
-    _setup_scheduler(config)
+    scheduler = _setup_scheduler(config)
 
     engine = TradingEngine(config)
-    await engine.start()
+    try:
+        await engine.start()
+    finally:
+        # Ctrl-C aflyser main-tasken; uden stop() lukkes ccxt-sessionen aldrig.
+        await engine.stop()
+        if scheduler is not None:
+            scheduler.shutdown(wait=False)
+        logger.info("Nedlukning færdig.")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
