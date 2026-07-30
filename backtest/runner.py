@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import logging
 import sys
 from datetime import date, datetime
@@ -330,16 +331,24 @@ def _run_all(config, timeframe: str) -> int:
                 rows.append({"strategy": strategy.name, "symbol": symbol,
                              "trades": 0, "win_rate": 0.0, "profit_factor": 0.0,
                              "max_dd": 0.0, "sharpe": 0.0, "total_pnl_pct": 0.0,
+                             "wins": 0, "losses": 0, "avg_win_pct": 0.0,
+                             "avg_loss_pct": 0.0, "avg_bars_held": 0.0,
                              "pass": False})
                 continue
             pf = m["profit_factor"]
             print(f" {m['total_trades']:>4d} trades | WR {m['win_rate']:>5.1f}% | "
                   f"PF {'inf' if pf == float('inf') else f'{pf:.2f}'}")
+            avg_bars = (
+                sum(t["bars_held"] for t in trades) / len(trades) if trades else 0.0
+            )
             rows.append({
                 "strategy": strategy.name, "symbol": symbol,
                 "trades": m["total_trades"], "win_rate": m["win_rate"],
                 "profit_factor": pf, "max_dd": m["max_drawdown_pct"],
                 "sharpe": m["sharpe"], "total_pnl_pct": m["total_pnl_pct"],
+                "wins": m["wins"], "losses": m["losses"],
+                "avg_win_pct": m["avg_win_pct"], "avg_loss_pct": m["avg_loss_pct"],
+                "avg_bars_held": round(avg_bars, 1),
                 "pass": _passes(m),
             })
             # Kun symboler med faktiske data (og dermed en kendt periode) importeres til DB.
@@ -353,6 +362,14 @@ def _run_all(config, timeframe: str) -> int:
 
     _print_suite_table(rows)
     _save_suite_csv(rows)
+    _save_trades_csv(all_trades)
+    # Rapporten er pynt oven på resultaterne — en fejl her må ikke koste hele
+    # suitens DB-import (samme best-effort-kontrakt som save_results_to_db).
+    try:
+        report.generate_html_report(rows, all_trades, periods)
+    except Exception as e:
+        logger.warning("Kunne ikke generere HTML-rapport: %s", e)
+        print(f"  ADVARSEL: HTML-rapport fejlede: {type(e).__name__}: {str(e)[:80]}")
     saved = save_results_to_db(db_records)
     if saved:
         print(f"  {saved} backtest-resultater importeret til DB (backtest_results-tabellen)")
@@ -361,29 +378,32 @@ def _run_all(config, timeframe: str) -> int:
 
 def _print_suite_table(rows: list[dict]) -> None:
     print()
-    print("=" * 92)
+    print("=" * 132)
     print(f"  {'Strategi':22s} {'Symbol':10s} {'Trades':>7s} {'Win%':>7s} "
-          f"{'PF':>7s} {'MaxDD%':>8s} {'Sharpe':>7s} {'PnL%':>9s}  {'OK':>3s}")
-    print("-" * 92)
+          f"{'PF':>7s} {'MaxDD%':>8s} {'Sharpe':>7s} {'PnL%':>9s} "
+          f"{'W':>5s} {'L':>5s} {'AvgW%':>7s} {'AvgL%':>7s} {'Bars':>6s}  {'OK':>3s}")
+    print("-" * 132)
     for r in rows:
         pf = r["profit_factor"]
         pf_s = "inf" if pf == float("inf") else f"{pf:.2f}"
         print(f"  {r['strategy']:22s} {r['symbol']:10s} {r['trades']:>7d} "
               f"{r['win_rate']:>7.1f} {pf_s:>7s} {r['max_dd']:>8.2f} "
-              f"{r['sharpe']:>7.2f} {r['total_pnl_pct']:>9.2f}  "
+              f"{r['sharpe']:>7.2f} {r['total_pnl_pct']:>9.2f} "
+              f"{r['wins']:>5d} {r['losses']:>5d} {r['avg_win_pct']:>7.2f} "
+              f"{r['avg_loss_pct']:>7.2f} {r['avg_bars_held']:>6.1f}  "
               f"{'✅' if r['pass'] else '❌':>3s}")
-    print("=" * 92)
+    print("=" * 132)
     n_pass = sum(1 for r in rows if r["pass"])
     print(f"  Godkendt til paper mode (alle tærskler): {n_pass}/{len(rows)}")
-    print("=" * 92)
+    print("=" * 132)
 
 
 def _save_suite_csv(rows: list[dict]) -> Path:
     report.RESULTS_DIR.mkdir(exist_ok=True)
     path = report.RESULTS_DIR / f"suite_{date.today().isoformat()}.csv"
     fields = ["strategy", "symbol", "trades", "win_rate", "profit_factor",
-              "max_dd", "sharpe", "total_pnl_pct", "pass"]
-    import csv
+              "max_dd", "sharpe", "total_pnl_pct", "wins", "losses",
+              "avg_win_pct", "avg_loss_pct", "avg_bars_held", "pass"]
     with path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
@@ -393,6 +413,26 @@ def _save_suite_csv(rows: list[dict]) -> Path:
                 row["profit_factor"] = "inf"
             writer.writerow(row)
     print(f"  Suite-resultater gemt til {path}")
+    return path
+
+
+def _save_trades_csv(all_trades: list[dict]) -> Path | None:
+    """Gem alle suitens trades samlet til én CSV (én række pr. trade).
+
+    Modsat report.save_csv (én fil pr. strategi×symbol) er det her hele suiten i
+    én fil, så per-trade data kan analyseres på tværs uden at samle filer først.
+    """
+    if not all_trades:
+        return None
+    report.RESULTS_DIR.mkdir(exist_ok=True)
+    path = report.RESULTS_DIR / f"trades_{date.today().isoformat()}.csv"
+    fields = ["strategy_id", "symbol", "side", "entry_time", "exit_time",
+              "entry_price", "exit_price", "pnl", "pnl_pct", "reason", "bars_held"]
+    with path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(all_trades)
+    print(f"  {len(all_trades)} trades gemt til {path}")
     return path
 
 
