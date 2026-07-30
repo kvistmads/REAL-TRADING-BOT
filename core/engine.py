@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 import uuid
 from datetime import datetime
 
@@ -21,7 +20,6 @@ from core.exchange import ExchangeClient
 from core.notifications import TelegramNotifier
 from data.fetcher import DataFetcher
 from data.indicators import add_all
-from data.mt5_fetcher import MT5Fetcher
 from execution.ab_router import get_assignment, record_trade_arm
 from execution.position_tracker import PositionTracker
 from reflection.news.accuracy_tracker import get_accuracy_report
@@ -40,8 +38,12 @@ _TIMEFRAME_SECONDS = {
     "1h": 3600, "4h": 14400, "1d": 86400,
 }
 
-# Dashboard-status skrives højst så ofte (sekunder) — throttle mod disk-spam.
-_STATUS_INTERVAL = 60
+# Position monitor (Phase 6 Del B): SL/TP-tjek koster ét prisopslag pr. symbol
+# med åbne positioner → hvert 1. time, uafhængigt af det 4-timers signal-tick.
+POSITION_CHECK_INTERVAL = 3600
+# bot_status.json er kun DB-læsning + atomisk diskskriv → hvert minut, så
+# dashboardet ikke står stille mellem tickene.
+STATUS_WRITE_INTERVAL = 60
 
 
 class TradingEngine:
@@ -55,13 +57,15 @@ class TradingEngine:
         self.strategies: list[BaseStrategy] = []
         self.gates: list = []
         self._running = False
+        self._tasks: list[asyncio.Task] = []
         self._last_summary_date = None
         self._summary_hour = self._parse_summary_hour()
-        # Dashboard-status (Phase 5 Del B): tælleren nulstilles ved døgnskift, og status
-        # skrives højst hvert _STATUS_INTERVAL sekund via en monotonisk throttle.
+        # Dashboard-status (Phase 5 Del B): tælleren nulstilles ved døgnskift.
         self.signals_today = 0
         self._signals_today_date = datetime.utcnow().date()
-        self._last_status_write = 0.0
+        # Seneste kendte pris pr. symbol — opdateres af både tick- og monitor-loopet
+        # og bruges til urealiseret PnL i bot_status.json.
+        self._last_prices: dict[str, float] = {}
         self._last_regimes: dict[str, str] = {}
         self._regime_gate: RegimeGate | None = None
         self._status_path = self.config.get("dashboard", {}).get("status_path", "bot_status.json")
@@ -79,12 +83,69 @@ class TradingEngine:
         await self._initialize()
         self._running = True
         logger.info("TradingEngine startet — kører i dry-run" if self.config["trading"]["dry_run"] else "TradingEngine startet — LIVE MODE")
+        self._tasks = [
+            asyncio.create_task(self._tick_loop()),
+            asyncio.create_task(self._position_monitor_loop()),
+        ]
+        try:
+            await asyncio.gather(*self._tasks)
+        except asyncio.CancelledError:  # stop() aflyser loopene i deres sleep
+            pass
+
+    async def _tick_loop(self) -> None:
+        """Signal-generator: fuld OHLCV-fetch + strategier hvert timeframes.primary."""
         while self._running:
             try:
                 await self._tick()
             except Exception as e:
                 logger.error(f"Fejl i tick: {e}", exc_info=True)
             await asyncio.sleep(self._get_sleep_seconds())
+
+    async def _position_monitor_loop(self) -> None:
+        """Exit-siden + dashboard, uafhængigt af det langsomme signal-tick.
+
+        Skriver bot_status.json hvert STATUS_WRITE_INTERVAL sekund og tjekker
+        SL/TP på åbne positioner hvert POSITION_CHECK_INTERVAL sekund.
+        """
+        checks_every = max(POSITION_CHECK_INTERVAL // STATUS_WRITE_INTERVAL, 1)
+        rounds = 0
+        while self._running:
+            await asyncio.sleep(STATUS_WRITE_INTERVAL)
+            rounds += 1
+            if rounds % checks_every == 0:
+                try:
+                    await self._check_positions_fast()
+                except Exception as e:  # en fejlet prisfetch må ikke stoppe dashboardet
+                    logger.error(f"Fejl i SL/TP-tjek: {e}", exc_info=True)
+            # _write_dashboard_status er selv best-effort (fejl logges internt).
+            await self._write_dashboard_status()
+
+    async def _check_positions_fast(self) -> None:
+        """Hent seneste pris for symboler med åbne positioner og evaluér SL/TP.
+
+        Ingen OHLCV-fetch, ingen indikatorer og ingen signal-generering — kun
+        exit-siden, så den kan køre langt hyppigere end _tick().
+        """
+        symbols = {p.symbol for p in self.position_tracker.get_open_positions()}
+        if not symbols:
+            return
+        prices: dict[str, float] = {}
+        for symbol in symbols:
+            price = await self.fetcher.get_latest_price(symbol)
+            if price is not None:
+                prices[symbol] = price
+        self._last_prices.update(prices)
+        await self._apply_sl_tp(prices)
+
+    async def _apply_sl_tp(self, prices: dict[str, float]) -> None:
+        """Luk positioner der har ramt SL/TP ved de givne priser og notificér."""
+        if not prices:
+            return
+        closed = await self.position_tracker.check_sl_tp(prices)
+        for trade in closed:
+            await self.notifier.send_trade_closed(trade, self._exit_reason(trade))
+        if closed:
+            logger.info(f"{len(closed)} positioner lukket via SL/TP")
 
     async def _initialize(self) -> None:
         await init_db()
@@ -107,7 +168,7 @@ class TradingEngine:
         logger.info(f"Gates aktive: {[g.name for g in self.gates]}")
 
         # Skriv en initial status med det samme, så dashboardet viser live data ved opstart.
-        await self._write_dashboard_status({})
+        await self._write_dashboard_status()
 
     async def _tick(self) -> None:
         primary_tf = self.config["timeframes"]["primary"]
@@ -117,23 +178,12 @@ class TradingEngine:
         # Hent aktuelle priser og tjek SL/TP
         current_prices: dict[str, float] = {}
         for symbol in symbols:
-            try:
-                if MT5Fetcher.is_forex(symbol):
-                    price = self.fetcher.get_tick_price(symbol)
-                    if price is not None:
-                        current_prices[symbol] = price
-                    continue
-                ticker = await self.exchange.fetch_ticker(symbol)
-                current_prices[symbol] = ticker["last"]
-            except Exception as e:
-                logger.warning(f"Kunne ikke hente pris for {symbol}: {e}")
+            price = await self.fetcher.get_latest_price(symbol)
+            if price is not None:
+                current_prices[symbol] = price
+        self._last_prices.update(current_prices)
 
-        if current_prices:
-            closed = await self.position_tracker.check_sl_tp(current_prices)
-            for trade in closed:
-                await self.notifier.send_trade_closed(trade, self._exit_reason(trade))
-            if closed:
-                logger.info(f"{len(closed)} positioner lukket via SL/TP")
+        await self._apply_sl_tp(current_prices)
 
         # Hent OHLCV for alle symboler
         all_bars = await self.fetcher.get_multi(symbols, primary_tf)
@@ -237,7 +287,6 @@ class TradingEngine:
                 await self.notifier.send_trade_opened(trade, signal.confidence)
 
         await self._maybe_daily_summary()
-        await self._maybe_write_status(current_prices)
 
     async def _log_signal(self, signal: Signal, gate_passed: bool, trade_id: str | None) -> None:
         log = SignalLog(
@@ -346,18 +395,15 @@ class TradingEngine:
             self.signals_today = 0
             self._signals_today_date = today
 
-    async def _maybe_write_status(self, current_prices: dict[str, float]) -> None:
-        if time.monotonic() - self._last_status_write >= _STATUS_INTERVAL:
-            await self._write_dashboard_status(current_prices)
-
-    async def _write_dashboard_status(self, current_prices: dict[str, float]) -> None:
+    async def _write_dashboard_status(self) -> None:
         """Saml bot-tilstand og skriv bot_status.json. Best-effort — fejl vælter ikke tick."""
         try:
             open_positions = (
                 self.position_tracker.get_open_positions() if self.position_tracker else []
             )
             positions = [
-                self._position_to_dict(p, current_prices.get(p.symbol)) for p in open_positions
+                self._position_to_dict(p, self._last_prices.get(p.symbol))
+                for p in open_positions
             ]
             open_pnl = sum(p["unrealized_pnl"] for p in positions)
 
@@ -402,7 +448,6 @@ class TradingEngine:
                 reflection=self._loop_c_status(),
                 path=self._status_path,
             )
-            self._last_status_write = time.monotonic()
         except Exception as e:
             logger.warning("Kunne ikke skrive dashboard-status: %s", e)
 
@@ -522,6 +567,10 @@ class TradingEngine:
 
     async def stop(self) -> None:
         self._running = False
+        # Loopene sover op til 4 timer — aflys dem frem for at vente på næste vågning.
+        for task in self._tasks:
+            task.cancel()
+        self._tasks = []
         if self.fetcher:
             self.fetcher.shutdown()
         if self.exchange:

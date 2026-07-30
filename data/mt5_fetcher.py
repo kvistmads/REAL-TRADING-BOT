@@ -38,14 +38,21 @@ class MT5Fetcher:
         return symbol in cls.FOREX_SYMBOLS
 
     def initialize(self) -> bool:
-        """Starter MT5-forbindelsen. Returnerer False hvis pakken mangler eller terminal ikke kører."""
+        """Starter MT5-forbindelsen. Returnerer False hvis pakken mangler eller terminal ikke kører.
+
+        False er ikke fatalt (Phase 6 Del A): forex/gold hentes fra yfinance uanset —
+        MT5 giver kun live tick-priser i stedet for seneste 1h-close.
+        """
         if mt5 is None:
-            logger.warning(
-                "MetaTrader5-pakken er ikke tilgængelig (Windows-only) — forex/gold skippes"
+            logger.info(
+                "MetaTrader5 ikke tilgængelig (Windows-only) — forex/gold-priser tages fra yfinance"
             )
             return False
         if not mt5.initialize():
-            logger.warning(f"MT5 initialize() fejlede: {mt5.last_error()} — forex/gold skippes")
+            logger.warning(
+                f"MT5 initialize() fejlede: {mt5.last_error()} "
+                "— forex/gold-priser tages fra yfinance"
+            )
             return False
         self._initialized = True
         logger.info("MT5-forbindelse etableret")
