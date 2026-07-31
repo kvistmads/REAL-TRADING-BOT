@@ -7,8 +7,9 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/madskvist/Documents/GitHub/REAL TRADING BOT/.venv/bin/python</string>
-        <string>/Users/madskvist/Documents/GitHub/REAL TRADING BOT/main.py</string>
+        <string>/bin/zsh</string>
+        <string>-c</string>
+        <string>cd "/Users/madskvist/Documents/GitHub/REAL TRADING BOT" &amp;&amp; exec .venv/bin/python main.py</string>
     </array>
 
     <key>WorkingDirectory</key>
