@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.madskvist.tradingbot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/madskvist/Documents/GitHub/REAL TRADING BOT/.venv/bin/python</string>
+        <string>/Users/madskvist/Documents/GitHub/REAL TRADING BOT/main.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/madskvist/Documents/GitHub/REAL TRADING BOT</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/madskvist/Documents/GitHub/REAL TRADING BOT/bot.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/madskvist/Documents/GitHub/REAL TRADING BOT/bot_error.log</string>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>
