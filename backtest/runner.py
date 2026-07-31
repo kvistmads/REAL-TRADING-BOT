@@ -170,10 +170,10 @@ def run_backtest(df: pd.DataFrame, strategy, symbol: str, config: dict,
     df = add_all(df)
     trades: list[dict] = []
     i = warmup
+    min_conf = config.get("strategies", {}).get("min_confidence", strategy.min_confidence)
     while i < len(df):
         window = df.iloc[:i].copy()
-        signal = strategy.generate_signal(window, symbol)
-        min_conf = config.get("strategies", {}).get("min_confidence", strategy.min_confidence)
+        signal = strategy.generate_signal(window, symbol, {"min_confidence": min_conf})
         if signal is not None and signal.confidence >= min_conf:
             future = df.iloc[i:].reset_index(drop=True)
             if len(future) < 2:

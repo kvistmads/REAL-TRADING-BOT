@@ -95,3 +95,14 @@ class TestMetrics:
         ]
         m = metrics.compute(trades)
         assert isinstance(m["sharpe"], float)
+
+    def test_sharpe_zero_variance(self):
+        # reversal_context × XAU/USD gav 9 identiske -3.0%-tab; std blev
+        # 3.7e-18 i stedet for 0, og sharpe eksploderede til -2.2e16.
+        trades = [
+            {"pnl": -3.0, "pnl_pct": -3.0,
+             "exit_time": pd.Timestamp("2024-01-01") + pd.Timedelta(days=30 * i)}
+            for i in range(9)
+        ]
+        m = metrics.compute(trades)
+        assert m["sharpe"] == 0.0
