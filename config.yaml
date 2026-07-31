@@ -26,7 +26,7 @@ strategies:
     - trend_momentum
     - reversal_context
     - volatility_breakout
-  min_confidence: 0.65
+  min_confidence: 0.45
 
 gates:
   confluence:
