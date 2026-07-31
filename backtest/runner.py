@@ -173,7 +173,8 @@ def run_backtest(df: pd.DataFrame, strategy, symbol: str, config: dict,
     while i < len(df):
         window = df.iloc[:i].copy()
         signal = strategy.generate_signal(window, symbol)
-        if signal is not None and signal.confidence >= strategy.min_confidence:
+        min_conf = config.get("strategies", {}).get("min_confidence", strategy.min_confidence)
+        if signal is not None and signal.confidence >= min_conf:
             future = df.iloc[i:].reset_index(drop=True)
             if len(future) < 2:
                 break
