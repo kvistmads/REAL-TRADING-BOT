@@ -91,7 +91,7 @@ reflection:
     promotion_accuracy: 0.60          # accuracy-grænse for Telegram-alert
     promotion_min_signals: 30         # minimum antal signals for at vurdere promotion
     sources:
-      cryptopanic: true
+      cryptopanic: false
       fear_greed: true
       alpaca: false                   # sæt true hvis ALPACA_API_KEY er i .env
     # Confirmation-hook (Phase 5 feature — byg infrastrukturen, aktiver ikke endnu)
