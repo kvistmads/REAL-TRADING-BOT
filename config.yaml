@@ -50,7 +50,7 @@ risk_defaults:
 
 notifications:
   telegram:
-    enabled: false          # Sæt til true når TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID er i .env
+    enabled: true
     daily_summary_time: "22:00"
 
 reflection:

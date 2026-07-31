@@ -80,8 +80,8 @@ def sharpe(pcts: list[float], trades: list[dict], risk_free: float = 0.0) -> flo
     std = math.sqrt(variance)
     # Identiske returns giver ikke std == 0 eksakt: 9 × -3.0% efterlader
     # afrundingsrester (std ~1e-18), og mean/std eksploderer så til ~1e16.
-    # Reel varians i pnl_pct ligger mange størrelsesordner over 1e-12.
-    if std < 1e-12:
+    # Reel varians i pnl_pct ligger mange størrelsesordner over 1e-10.
+    if std < 1e-10:
         return 0.0
 
     years = _year_span(trades)
