@@ -1,0 +1,29 @@
+2026-07-31 11:41:36 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-31 11:41:36 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-31 11:41:36 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-07-31 11:41:36 [INFO] apscheduler.scheduler: Added job "_run_reflection" to job store "default"
+2026-07-31 11:41:36 [INFO] apscheduler.scheduler: Added job "_run_reflection" to job store "default"
+2026-07-31 11:41:36 [INFO] apscheduler.scheduler: Added job "_run_reflection" to job store "default"
+2026-07-31 11:41:36 [INFO] apscheduler.scheduler: Scheduler started
+2026-07-31 11:41:36 [INFO] __main__: Reflection-scheduler startet: nightly='0 2 * * *', weekly='0 3 * * 0', news='0 */2 * * *' (UTC).
+2026-07-31 11:41:36 [INFO] data.mt5_fetcher: MetaTrader5 ikke tilgængelig (Windows-only) — forex/gold-priser tages fra yfinance
+2026-07-31 11:41:36 [INFO] execution.position_tracker: Indlæst 0 åbne positioner fra DB
+2026-07-31 11:41:36 [INFO] core.engine: Strategier loadet: ['trend_momentum', 'reversal_context', 'volatility_breakout']
+2026-07-31 11:41:36 [INFO] core.engine: Gates aktive: ['risk', 'regime']
+2026-07-31 11:41:36 [INFO] core.engine: TradingEngine startet — kører i dry-run
+2026-07-31 12:00:00 [INFO] apscheduler.executors.default: Running job "_run_reflection (trigger: cron[month='*', day='*', day_of_week='*', hour='*/2', minute='0'], next run at: 2026-07-31 12:00:00 UTC)" (scheduled at 2026-07-31 10:00:00+00:00)
+2026-07-31 12:00:05 [INFO] reflection.news.accuracy_tracker: Evaluerede 0 shadow signals.
+2026-07-31 12:00:06 [WARNING] reflection.news.fetcher: News-fetch fejlede (https://cryptopanic.com/api/v1/posts/?auth_token=&public=true&kind=news): HTTP Error 403: Forbidden
+2026-07-31 12:00:16 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-31 12:00:16 [INFO] reflection.news.shadow_trader: Shadow signal droppet for BTC/USDT (dir=neutral conf=0.35).
+2026-07-31 12:00:17 [WARNING] reflection.news.fetcher: News-fetch fejlede (https://cryptopanic.com/api/v1/posts/?auth_token=&public=true&kind=news): HTTP Error 403: Forbidden
+2026-07-31 12:00:25 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-31 12:00:25 [INFO] reflection.news.shadow_trader: Shadow signal droppet for ETH/USDT (dir=neutral conf=0.30).
+2026-07-31 12:00:26 [WARNING] reflection.news.fetcher: News-fetch fejlede (https://cryptopanic.com/api/v1/posts/?auth_token=&public=true&kind=news): HTTP Error 403: Forbidden
+2026-07-31 12:00:34 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-31 12:00:34 [INFO] reflection.news.shadow_trader: Shadow signal droppet for SOL/USDT (dir=neutral conf=0.40).
+2026-07-31 12:00:34 [INFO] reflection.news.shadow_trader: Ingen headlines for EUR/USD — intet shadow signal.
+2026-07-31 12:00:34 [INFO] reflection.news.shadow_trader: Ingen headlines for GBP/USD — intet shadow signal.
+2026-07-31 12:00:34 [INFO] reflection.news.shadow_trader: Ingen headlines for XAU/USD — intet shadow signal.
+2026-07-31 12:00:34 [INFO] reflection.loop_c: Loop C færdig: {'evaluated': 0, 'generated': 0, 'alerts': 0, 'accuracy': 0.0, 'total_signals': 0, 'dry_run': False}
+2026-07-31 12:00:34 [INFO] apscheduler.executors.default: Job "_run_reflection (trigger: cron[month='*', day='*', day_of_week='*', hour='*/2', minute='0'], next run at: 2026-07-31 12:00:00 UTC)" executed successfully
