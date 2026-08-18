@@ -77,7 +77,7 @@ class TelegramNotifier:
 
     async def send_gate_rejected(self, signal: Signal, result: GateResult) -> None:
         text = (
-            f"⚠️ REJECTED {signal.symbol} [{signal.strategy_id}]\n"
+            f"⚠️ REJECTED {signal.symbol} [{signal.strategy_id}] {signal.side.upper()}\n"
             f"Gate: {result.gate_name} | Reason: {result.reason}"
         )
         await self._send(text)

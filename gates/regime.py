@@ -14,6 +14,11 @@ TRENDING = "trending"
 VOLATILE = "volatile"
 SIDEWAYS = "sideways"
 
+# Strategier der er designet til ranging/konsoliderende markeder og derfor IKKE
+# skal blokeres i sideways-regime: reversal_context (RSI-divergence opstår netop i
+# konsolidering) og volatility_breakout (Bollinger Squeeze er et sideways-fænomen).
+SIDEWAYS_OK_STRATEGIES = {"reversal_context", "volatility_breakout"}
+
 
 class RegimeGate(BaseGate):
     name = "regime"
@@ -84,6 +89,15 @@ class RegimeGate(BaseGate):
             )
 
         # SIDEWAYS
+        if signal.strategy_id in SIDEWAYS_OK_STRATEGIES:
+            reason = (
+                f"Sideways market (ADX={adx_str}) — {signal.strategy_id} tilladt i ranging"
+            )
+            logger.info(f"RegimeGate OK ({signal.symbol}): {reason}")
+            return GateResult(
+                gate_name=self.name, passed=True, score=0.7, reason=reason,
+            )
+
         reason = f"Sideways market (ADX={adx_str})"
         logger.info(f"RegimeGate AFVIST ({signal.symbol}): {reason}")
         return GateResult(gate_name=self.name, passed=False, score=0.0, reason=reason)

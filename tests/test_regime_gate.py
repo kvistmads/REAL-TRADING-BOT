@@ -3,8 +3,15 @@ import pandas as pd
 
 from data.indicators import add_all
 from gates.base import GateResult
-from gates.regime import RegimeGate, TRENDING, VOLATILE, SIDEWAYS
+from gates.regime import (
+    RegimeGate,
+    SIDEWAYS_OK_STRATEGIES,
+    TRENDING,
+    VOLATILE,
+    SIDEWAYS,
+)
 from strategies.base import Signal
+from strategies.registry import load_strategies
 
 CONFIG = {
     "gates": {
@@ -42,15 +49,29 @@ def sideways_df(n: int = 300) -> pd.DataFrame:
     return _df(100 + rng.normal(0, 0.05, n))
 
 
+def choppy_df(seed: int, drift: float, noise: float, n: int = 300) -> pd.DataFrame:
+    """Konsolidering med lav — men ikke nul — ADX, som live-kørslens SOL/USDT (ADX 15-22)."""
+    rng = np.random.default_rng(seed)
+    return _df(100 + np.cumsum(rng.normal(drift, noise, n)))
+
+
+def adx18_df() -> pd.DataFrame:
+    return choppy_df(seed=1, drift=0.02, noise=0.8)  # ADX ≈ 18
+
+
+def adx15_df() -> pd.DataFrame:
+    return choppy_df(seed=5, drift=0.05, noise=0.5)  # ADX ≈ 15
+
+
 def volatile_df(n: int = 300) -> pd.DataFrame:
     # Store, retningsløse udsving → høj ATR, lav ADX, ingen konsistent EMA-hældning.
     prices = np.array([100.0 if i % 2 == 0 else 135.0 for i in range(n)])
     return _df(prices, high_mult=1.02, low_mult=0.98)
 
 
-def _signal(confidence: float) -> Signal:
+def _signal(confidence: float, strategy_id: str = "rsi_divergence") -> Signal:
     return Signal(
-        strategy_id="rsi_divergence", symbol="BTC/USDT", side="long",
+        strategy_id=strategy_id, symbol="BTC/USDT", side="long",
         confidence=confidence, timeframe="4h", metadata={},
     )
 
@@ -103,3 +124,42 @@ class TestRegimeGate:
         result = self.gate.evaluate(_signal(0.90), ctx)
         assert result.passed is False
         assert ctx["regime"] == SIDEWAYS
+
+
+class TestSidewaysIsStrategyAware:
+    """Sideways blokerer kun trend-strategier — ranging-strategierne slipper igennem."""
+
+    def setup_method(self):
+        self.gate = RegimeGate(CONFIG)
+
+    def test_reversal_context_passes_at_adx_18(self):
+        ctx = {"df": adx18_df()}
+        result = self.gate.evaluate(_signal(0.65, "reversal_context"), ctx)
+        assert ctx["regime"] == SIDEWAYS
+        assert result.passed is True
+        assert result.score == 0.7
+        assert "ADX=18" in result.reason
+        assert "reversal_context" in result.reason
+
+    def test_volatility_breakout_passes_at_adx_15(self):
+        ctx = {"df": adx15_df()}
+        result = self.gate.evaluate(_signal(0.65, "volatility_breakout"), ctx)
+        assert ctx["regime"] == SIDEWAYS
+        assert result.passed is True
+        assert result.score == 0.7
+        assert "ADX=15" in result.reason
+        assert "volatility_breakout" in result.reason
+
+    def test_trend_momentum_blocked_at_adx_18(self):
+        ctx = {"df": adx18_df()}
+        result = self.gate.evaluate(_signal(0.65, "trend_momentum"), ctx)
+        assert ctx["regime"] == SIDEWAYS
+        assert result.passed is False
+        assert result.score == 0.0
+        assert "trend_momentum" not in result.reason
+
+    def test_sideways_ok_strategies_are_real_strategies(self):
+        # Fanger tastefejl i konstanten — et navn der ikke findes i registeret ville
+        # lydløst slå fixet fra.
+        registered = {s.name for s in load_strategies().all()}
+        assert SIDEWAYS_OK_STRATEGIES <= registered

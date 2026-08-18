@@ -66,6 +66,25 @@ class TestFormatting:
         assert "Sideways" in text
 
     @pytest.mark.asyncio
+    async def test_gate_rejected_includes_direction(self, monkeypatch):
+        notifier = _enabled_notifier(monkeypatch)
+        notifier._send = AsyncMock()
+        signal = Signal("reversal_context", "SOL/USDT", "long", 0.6, "4h", {})
+        result = GateResult("regime", False, 0.0, "Sideways market (ADX=18)")
+        await notifier.send_gate_rejected(signal, result)
+        text = notifier._send.call_args[0][0]
+        assert "REJECTED SOL/USDT [reversal_context] LONG" in text
+
+    @pytest.mark.asyncio
+    async def test_gate_rejected_direction_short(self, monkeypatch):
+        notifier = _enabled_notifier(monkeypatch)
+        notifier._send = AsyncMock()
+        signal = Signal("trend_momentum", "BTC/USDT", "short", 0.6, "4h", {})
+        result = GateResult("regime", False, 0.0, "Sideways market (ADX=18)")
+        await notifier.send_gate_rejected(signal, result)
+        assert "SHORT" in notifier._send.call_args[0][0]
+
+    @pytest.mark.asyncio
     async def test_daily_summary_format(self, monkeypatch):
         notifier = _enabled_notifier(monkeypatch)
         notifier._send = AsyncMock()
