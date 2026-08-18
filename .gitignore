@@ -17,3 +17,7 @@ config.yaml.bak.*
 
 # Phase 5 — dashboard runtime-status (skrives af status_writer.py)
 bot_status.json
+
+# Runtime-logs (skrives af LaunchAgent/cron — aldrig commit)
+bot.log
+bot_error.log

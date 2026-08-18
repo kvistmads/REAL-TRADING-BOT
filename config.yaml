@@ -39,7 +39,7 @@ gates:
   regime:
     enabled: true
     blocking: true
-    min_trending_adx: 25
+    min_trending_adx: 20
     max_volatile_atr_pct: 4.0
     volatile_min_confidence: 0.75
 
