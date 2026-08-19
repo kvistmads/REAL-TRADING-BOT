@@ -26,8 +26,10 @@ def print_metrics(metrics: dict, meta: dict) -> None:
         f"({meta.get('from', '?')} → {meta.get('to', '?')})"
     )
     print("=" * 60)
+    open_at_end = metrics.get("open_at_end_count", 0)
+    open_str = f" (+{open_at_end} åbne ved data-slut, ikke medregnet)" if open_at_end else ""
     print(
-        f"  Trades: {metrics['total_trades']} | "
+        f"  Trades: {metrics.get('closed_trades', metrics['total_trades'])}{open_str} | "
         f"Win rate: {metrics['win_rate']}% | "
         f"Avg P&L: {metrics['avg_pnl_pct']:+.2f}% | "
         f"Max drawdown: {metrics['max_drawdown_pct']:.2f}%"

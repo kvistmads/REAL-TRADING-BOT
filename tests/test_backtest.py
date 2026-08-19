@@ -96,6 +96,76 @@ class TestMetrics:
         m = metrics.compute(trades)
         assert isinstance(m["sharpe"], float)
 
+    def test_end_of_data_udelades_fra_win_rate(self):
+        # 2 rigtige wins + 1 uafsluttet tab → 100%, ikke 66%
+        trades = [
+            {"pnl": 2.0, "pnl_pct": 2.0, "reason": "take_profit"},
+            {"pnl": 3.0, "pnl_pct": 3.0, "reason": "take_profit"},
+            {"pnl": -5.0, "pnl_pct": -5.0, "reason": "end_of_data"},
+        ]
+        m = metrics.compute(trades)
+        assert m["win_rate"] == 100.0
+        assert m["wins"] == 2
+        assert m["losses"] == 0
+
+    def test_end_of_data_tælles_men_indgår_ikke_i_metrics(self):
+        trades = [
+            {"pnl": 2.0, "pnl_pct": 2.0, "reason": "take_profit"},
+            {"pnl": 3.0, "pnl_pct": 3.0, "reason": "take_profit"},
+            {"pnl": -5.0, "pnl_pct": -5.0, "reason": "end_of_data"},
+        ]
+        m = metrics.compute(trades)
+        assert m["total_trades"] == 3          # det fulde billede
+        assert m["closed_trades"] == 2         # grundlaget for metrics
+        assert m["open_at_end_count"] == 1
+        assert m["total_pnl"] == 5.0           # -5 fra den uafsluttede er ude
+        assert m["avg_pnl_pct"] == 2.5
+
+    def test_drawdown_ignorerer_uafsluttet_trade(self):
+        # Den uafsluttede -10% ville ellers dominere drawdown'en.
+        trades = [
+            {"pnl": 2.0, "pnl_pct": 2.0, "reason": "take_profit"},
+            {"pnl": -1.0, "pnl_pct": -1.0, "reason": "stop_loss"},
+            {"pnl": -10.0, "pnl_pct": -10.0, "reason": "end_of_data"},
+        ]
+        m = metrics.compute(trades)
+        assert m["max_drawdown_pct"] == -1.0
+
+    def test_sharpe_ignorerer_uafsluttet_trade(self):
+        real = [
+            {"pnl": 1.0, "pnl_pct": 1.0, "reason": "take_profit",
+             "exit_time": pd.Timestamp("2024-01-01")},
+            {"pnl": 2.0, "pnl_pct": 2.0, "reason": "take_profit",
+             "exit_time": pd.Timestamp("2024-06-01")},
+            {"pnl": -1.0, "pnl_pct": -1.0, "reason": "stop_loss",
+             "exit_time": pd.Timestamp("2024-12-01")},
+        ]
+        unfinished = {"pnl": -30.0, "pnl_pct": -30.0, "reason": "end_of_data",
+                      "exit_time": pd.Timestamp("2025-06-01")}
+        assert metrics.compute(real)["sharpe"] == metrics.compute(real + [unfinished])["sharpe"]
+
+    def test_kun_uafsluttede_trades_giver_nul_metrics(self):
+        m = metrics.compute([{"pnl": 4.0, "pnl_pct": 4.0, "reason": "end_of_data"}])
+        assert m["total_trades"] == 1
+        assert m["closed_trades"] == 0
+        assert m["open_at_end_count"] == 1
+        assert m["win_rate"] == 0.0
+        assert m["total_pnl"] == 0.0
+
+    def test_tom_liste_har_de_nye_felter(self):
+        m = metrics.compute([])
+        assert m["closed_trades"] == 0
+        assert m["open_at_end_count"] == 0
+
+    def test_time_stop_tæller_som_afsluttet(self):
+        m = metrics.compute([{"pnl": -1.0, "pnl_pct": -1.0, "reason": "time_stop"}])
+        assert m["closed_trades"] == 1
+        assert m["open_at_end_count"] == 0
+
+    def test_breakeven_tæller_som_afsluttet(self):
+        m = metrics.compute([{"pnl": 0.0, "pnl_pct": 0.0, "reason": "breakeven"}])
+        assert m["closed_trades"] == 1
+
     def test_sharpe_zero_variance(self):
         # reversal_context × XAU/USD gav 9 identiske -3.0%-tab; std blev
         # 3.7e-18 i stedet for 0, og sharpe eksploderede til -2.2e16.

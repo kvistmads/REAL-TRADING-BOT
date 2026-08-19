@@ -260,7 +260,8 @@ def _to_db_record(strategy_id: str, symbol: str, m: dict, period: tuple, source_
         "symbol": symbol,
         "period_start": start,
         "period_end": end,
-        "total_trades": int(m.get("total_trades", 0)),
+        # Baseline'en skal matche de metrics den ledsager → afsluttede trades.
+        "total_trades": int(m.get("closed_trades", m.get("total_trades", 0))),
         "win_rate": round(m.get("win_rate", 0.0) / 100, 4),
         "profit_factor": None if pf == float("inf") else round(float(pf), 4),
         "sharpe": round(float(m.get("sharpe", 0.0)), 4),
@@ -332,8 +333,10 @@ THRESHOLDS = {
 
 
 def _passes(m: dict) -> bool:
+    # Sample-kravet gælder rigtige exits: 30 trades hvoraf 25 stadig var åbne da
+    # data slap op er ikke 30 udfald at bedømme en strategi på.
     return (
-        m["total_trades"] > THRESHOLDS["total_trades"]
+        m.get("closed_trades", m["total_trades"]) > THRESHOLDS["total_trades"]
         and m["win_rate"] > THRESHOLDS["win_rate"]
         and (m["profit_factor"] == float("inf") or m["profit_factor"] > THRESHOLDS["profit_factor"])
         and m["max_drawdown_pct"] > THRESHOLDS["max_drawdown_pct"]
@@ -378,21 +381,25 @@ def _run_all(config, timeframe: str) -> int:
             except Exception as e:  # data-fejl pr. symbol må ikke stoppe suiten
                 print(f" FEJL: {type(e).__name__}: {str(e)[:80]}")
                 rows.append({"strategy": strategy.name, "symbol": symbol,
-                             "trades": 0, "win_rate": 0.0, "profit_factor": 0.0,
+                             "trades": 0, "open_at_end": 0,
+                             "win_rate": 0.0, "profit_factor": 0.0,
                              "max_dd": 0.0, "sharpe": 0.0, "total_pnl_pct": 0.0,
                              "wins": 0, "losses": 0, "avg_win_pct": 0.0,
                              "avg_loss_pct": 0.0, "avg_bars_held": 0.0,
                              "pass": False})
                 continue
             pf = m["profit_factor"]
-            print(f" {m['total_trades']:>4d} trades | WR {m['win_rate']:>5.1f}% | "
-                  f"PF {'inf' if pf == float('inf') else f'{pf:.2f}'}")
+            print(f" {m['closed_trades']:>4d} trades | WR {m['win_rate']:>5.1f}% | "
+                  f"PF {'inf' if pf == float('inf') else f'{pf:.2f}'}"
+                  + (f" | {m['open_at_end_count']} åbne v. data-slut"
+                     if m["open_at_end_count"] else ""))
             avg_bars = (
                 sum(t["bars_held"] for t in trades) / len(trades) if trades else 0.0
             )
             rows.append({
                 "strategy": strategy.name, "symbol": symbol,
-                "trades": m["total_trades"], "win_rate": m["win_rate"],
+                "trades": m["closed_trades"], "win_rate": m["win_rate"],
+                "open_at_end": m["open_at_end_count"],
                 "profit_factor": pf, "max_dd": m["max_drawdown_pct"],
                 "sharpe": m["sharpe"], "total_pnl_pct": m["total_pnl_pct"],
                 "wins": m["wins"], "losses": m["losses"],
@@ -401,7 +408,7 @@ def _run_all(config, timeframe: str) -> int:
                 "pass": _passes(m),
             })
             # Kun symboler med faktiske data (og dermed en kendt periode) importeres til DB.
-            if m["total_trades"] > 0 and symbol in periods:
+            if m["closed_trades"] > 0 and symbol in periods:
                 db_records.append(
                     _to_db_record(strategy.name, symbol, m, periods[symbol], source_file)
                 )
@@ -450,9 +457,9 @@ def _print_suite_table(rows: list[dict]) -> None:
 def _save_suite_csv(rows: list[dict]) -> Path:
     report.RESULTS_DIR.mkdir(exist_ok=True)
     path = report.RESULTS_DIR / f"suite_{date.today().isoformat()}.csv"
-    fields = ["strategy", "symbol", "trades", "win_rate", "profit_factor",
-              "max_dd", "sharpe", "total_pnl_pct", "wins", "losses",
-              "avg_win_pct", "avg_loss_pct", "avg_bars_held", "pass"]
+    fields = ["strategy", "symbol", "trades", "open_at_end", "win_rate",
+              "profit_factor", "max_dd", "sharpe", "total_pnl_pct", "wins",
+              "losses", "avg_win_pct", "avg_loss_pct", "avg_bars_held", "pass"]
     with path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
