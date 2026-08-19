@@ -8,6 +8,7 @@ læser eller skriver produktionsdatabasen.
 """
 from __future__ import annotations
 
+from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from core.database import Base
@@ -19,7 +20,10 @@ async def temp_db(monkeypatch, tmp_path, *modules: str):
     modules: modulstier hvis ``async_session_maker`` skal peges om,
     fx "execution.position_tracker". Returnerer session-makeren.
     """
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/test.db")
+    # NullPool: aiosqlite lukker sin worker-tråd når sessionen lukker. Uden den
+    # overlever tråden pytest-asyncios event-loop og larmer med "Event loop is closed".
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/test.db",
+                                 poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
