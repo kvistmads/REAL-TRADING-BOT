@@ -82,6 +82,9 @@ class SignalLog(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     gate_passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
     trade_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # {gate_name: {passed, score, reason}} — samme form som Trade.gate_scores.
+    # Uden den kan Loop A ikke sige HVILKEN gate der afviste et signal.
+    gate_scores: Mapped[Any] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class StrategyPerformance(Base):

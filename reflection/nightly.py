@@ -31,6 +31,7 @@ from reflection.analyst import ReflectionAnalyst
 from reflection.applier import ParameterApplier
 from reflection.chromadb_store import ObservationStore
 from reflection.research.researcher import Researcher
+from reflection.signal_analyzer import analyze_signals
 from reflection.strategy_memory import StrategyMemory
 from reflection.reporter import (
     TelegramReporter,
@@ -225,10 +226,23 @@ def run_nightly(
     report_only: list[dict] = []
     all_obs_for_report: list[dict] = []
 
+    lookback_days = rcfg["nightly"]["lookback_days"]
+    signal_stats: dict = {"total": 0}
+
     with session_factory() as session:
         total_trades = extractor.count_closed_trades(session)
-        df = extractor.extract_closed_trades(session, rcfg["nightly"]["lookback_days"])
+        df = extractor.extract_closed_trades(session, lookback_days)
         logger.info("Nightly: %d lukkede trades i lookback, %d totalt.", len(df), total_trades)
+
+        # Signal-analysen kører UANSET om der er lukkede trades: med 0 trades er
+        # SignalLog det eneste sted der står hvad botten ville have handlet.
+        try:
+            signal_stats = analyze_signals(session, lookback_days)
+            logger.info("Nightly: %d signals i lookback (%d passerede).",
+                        signal_stats.get("total", 0), signal_stats.get("passed", 0))
+        except Exception as e:  # signal-analysen må aldrig vælte nightly
+            logger.warning("Signal-analyse fejlede: %s", e)
+            signal_stats = {"total": 0}
 
         raw_observations: list[dict] = []
         if not df.empty:
@@ -306,10 +320,13 @@ def run_nightly(
 
         session.commit()
 
-    report_path = write_nightly_report(date_str, all_obs_for_report)
+    report_path = write_nightly_report(
+        date_str, all_obs_for_report, signal_stats=signal_stats, lookback_days=lookback_days
+    )
     message = format_nightly_telegram(
         date_str, len(df) if not df.empty else 0,
         auto_applied, pending, report_only, report_path,
+        signal_stats=signal_stats,
     )
     reporter.send(message)
 
@@ -317,6 +334,8 @@ def run_nightly(
         "date": date_str,
         "trades_analysed": int(len(df)),
         "total_trades": total_trades,
+        "signals_analysed": signal_stats.get("total", 0),
+        "signals_passed": signal_stats.get("passed", 0),
         "auto_applied": len(auto_applied),
         "pending": len(pending),
         "report_only": len(report_only),

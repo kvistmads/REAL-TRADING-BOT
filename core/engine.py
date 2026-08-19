@@ -278,7 +278,7 @@ class TradingEngine:
                         await self.notifier.send_gate_rejected(signal, result)
                         break
 
-                await self._log_signal(signal, gate_passed, None)
+                await self._log_signal(signal, gate_passed, None, gate_scores)
 
                 if not gate_passed:
                     continue
@@ -306,7 +306,8 @@ class TradingEngine:
 
         await self._maybe_daily_summary()
 
-    async def _log_signal(self, signal: Signal, gate_passed: bool, trade_id: str | None) -> None:
+    async def _log_signal(self, signal: Signal, gate_passed: bool, trade_id: str | None,
+                          gate_scores: dict | None = None) -> None:
         log = SignalLog(
             id=str(uuid.uuid4()),
             strategy_id=signal.strategy_id,
@@ -320,6 +321,7 @@ class TradingEngine:
             timestamp=utc_now(),
             gate_passed=gate_passed,
             trade_id=trade_id,
+            gate_scores=gate_scores or {},
         )
         async with async_session_maker() as session:
             session.add(log)
