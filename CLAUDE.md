@@ -104,6 +104,35 @@ Engine'en kører nu to parallelle loops via `asyncio.gather` i `start()`:
 Priser hentes ét sted: `DataFetcher.get_latest_price()` (crypto → ccxt-ticker, forex → MT5-tick
 eller seneste yfinance-1h-close). `self._last_prices` fodrer urealiseret PnL i dashboardet.
 
+## Arkitektur-fixes (`PRD_ARCHITECTURE_FIXES.md`)
+- **Exits**: SL/TP er nu volatilitetstilpasset — `SL = atr_sl_multiplier × ATR(14)`,
+  `TP = tp_rr_ratio × SL-afstand` (config: `risk_defaults.<asset_class>`). `sl_pct`/`tp_pct`
+  bruges KUN som fallback når ATR mangler. Chart-niveauer fra et signal vinder altid.
+  Formlen findes to steder med identisk resultat (test låser det): `backtest/runner._resolve_sl_tp`
+  og `engine._resolve_sl_tp(signal, price, df=...)`.
+- **Breakeven**: SL flyttes til entry når prisen er `trading.breakeven_trigger_pct` (0.5) af vejen
+  mod TP. Backtest: i bar-løkken → `reason="breakeven"`. Live: `Trade.breakeven_trigger` beregnes
+  ved åbning, `PositionTracker.check_breakeven()` kaldes FØR `check_sl_tp()` i `_apply_sl_tp`.
+- **Time-stop**: `trading.max_bars_held` (24 = 4 døgn på 4h). Backtest tjekker EFTER SL/TP i
+  bar-løkken; live måler vægur-tid siden entry (`check_time_stop`). 0 slår det fra.
+- **Metrics**: `end_of_data`-trades indgår IKKE i win-rate/Sharpe/drawdown/PnL. `total_trades` =
+  alle, `closed_trades` = grundlaget for metrics, `open_at_end_count` = udeladte. Paper-tærsklen
+  "> 20 trades" og BacktestResult-baselinen bruger `closed_trades`.
+- **Fetcher**: alle yfinance/ccxt-kald går gennem retry med exponential backoff (3 forsøg, 2s/4s);
+  `_validate_ohlcv` afviser tomme svar, manglende kolonner, NaN og ikke-monotone timestamps →
+  `None` (caches ikke), og `get_multi` udelader symbolet.
+- **Indikator-cache**: `add_all()` er memoiseret (FIFO, 50 entries) på datasættets INDHOLD — ikke
+  kun indekset, som ville kollidere mellem symboler med samme længde. `add_all()` muterer ikke
+  længere kalderens df. Ryd med `clear_indicator_cache()`. Strategier må ALDRIG kalde `add_all`
+  selv (statisk test); engine beregner bundlen én gang pr. symbol og deler den.
+- **Loop A signal-analyse**: `reflection/signal_analyzer.analyze_signals()` kører uanset antal
+  lukkede trades og ender altid i rapport + Telegram. Kræver `SignalLog.gate_scores` (migration
+  `7450c4f8f05d`) for at kunne navngive den afvisende gate; ældre rækker tælles som "ukendt".
+- **Migrationer**: `f85e785151ca` (trades.breakeven_trigger), `7450c4f8f05d` (signals.gate_scores).
+  Kør `.venv/bin/alembic upgrade head` på eksisterende DB'er.
+- Testfixtures: `tests/fixtures/db.temp_db` (isoleret async SQLite pr. test) og
+  `tests/fixtures/engine.fake_engine` (TradingEngine uden I/O).
+
 ## Ikke bygget endnu (Phase 7+)
 Live trading + MEXC API-keys (Phase 7), confluence-gate (forbliver OFF),
 FastAPI-dashboard (HTML-dashboardet dækker behovet), Twitter/X, multi-exchange.
