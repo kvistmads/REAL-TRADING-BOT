@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from math import ceil
 
@@ -42,6 +43,84 @@ _YF_MAX_DAYS = {"1m": 7, "5m": 60, "15m": 60}
 _YF_BAR_HOURS = {"1m": 1 / 60, "5m": 5 / 60, "15m": 0.25, "1h": 1.0, "1d": 24.0}
 
 
+# Retry-politik for netværkskald: 3 forsøg med 2s/4s backoff. Et enkelt 5xx eller
+# en tabt forbindelse må ikke koste et helt tick (næste er 4 timer væk).
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 2.0
+
+REQUIRED_OHLCV_COLUMNS = ("open", "high", "low", "close", "volume")
+
+
+def _fetch_with_retry(fetch_fn, max_retries: int = MAX_RETRIES,
+                      base_delay: float | None = None, label: str = ""):
+    """Kald fetch_fn med exponential backoff. Rejser sidste exception hvis alle fejler.
+
+    Blokerende (time.sleep) — kaldes kun fra tråde via asyncio.to_thread eller fra
+    synkron kode, aldrig direkte i event-loopet. base_delay=None læser modulets
+    RETRY_BASE_DELAY ved kaldet, så tests kan skrue ventetiden ned.
+    """
+    base_delay = RETRY_BASE_DELAY if base_delay is None else base_delay
+    for attempt in range(max_retries):
+        try:
+            return fetch_fn()
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "Fetch fejlede%s (forsøg %d/%d): %s — prøver igen om %.0fs",
+                f" for {label}" if label else "", attempt + 1, max_retries, e, delay,
+            )
+            time.sleep(delay)
+    return None
+
+
+async def _fetch_with_retry_async(fetch_fn, max_retries: int = MAX_RETRIES,
+                                  base_delay: float | None = None, label: str = ""):
+    """Som _fetch_with_retry, men til awaitables (ccxt async) — sover uden at blokere."""
+    base_delay = RETRY_BASE_DELAY if base_delay is None else base_delay
+    for attempt in range(max_retries):
+        try:
+            return await fetch_fn()
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "Fetch fejlede%s (forsøg %d/%d): %s — prøver igen om %.0fs",
+                f" for {label}" if label else "", attempt + 1, max_retries, e, delay,
+            )
+            await asyncio.sleep(delay)
+    return None
+
+
+def _validate_ohlcv(df: pd.DataFrame | None, symbol: str) -> bool:
+    """Sanity-check på en OHLCV-ramme. False → data må ikke bruges til signaler.
+
+    Fanger de fejl der ellers propagerer stille ind i indikatorerne: tomme svar,
+    manglende kolonner, NaN-huller og barer der ikke kommer i tidsrækkefølge.
+    """
+    if df is None or df.empty:
+        logger.warning(f"[{symbol}] Tom OHLCV-respons")
+        return False
+
+    for col in REQUIRED_OHLCV_COLUMNS:
+        if col not in df.columns:
+            logger.warning(f"[{symbol}] Mangler kolonne '{col}'")
+            return False
+        if df[col].isna().any():
+            logger.warning(f"[{symbol}] NaN i kolonne '{col}'")
+            return False
+
+    # Tidsstempler ligger i 'time'-kolonnen (ccxt/yfinance/MT5 normaliseres alle
+    # dertil); falder tilbage på indekset hvis kolonnen mangler.
+    stamps = df["time"] if "time" in df.columns else df.index.to_series()
+    if not stamps.is_monotonic_increasing:
+        logger.warning(f"[{symbol}] Timestamps ikke monotont stigende")
+        return False
+    return True
+
+
 def _yf_period(interval: str, bars: int) -> str:
     """Kalendervindue der dækker `bars` barer i `interval`.
 
@@ -73,8 +152,11 @@ def _fetch_yfinance(symbol: str, timeframe: str, limit: int) -> pd.DataFrame | N
     # Barer der skal hentes FØR resample (4h = 4 × 1h).
     mult = _TIMEFRAME_SECONDS[timeframe] // _TIMEFRAME_SECONDS[interval]
     try:
-        raw = yf.download(ticker, period=_yf_period(interval, limit * mult),
-                          interval=interval, auto_adjust=True, progress=False)
+        raw = _fetch_with_retry(
+            lambda: yf.download(ticker, period=_yf_period(interval, limit * mult),
+                                interval=interval, auto_adjust=True, progress=False),
+            label=f"{symbol} ({ticker})",
+        )
     except Exception as e:
         logger.warning(f"yfinance fetch fejlede for {symbol} ({ticker}): {e}")
         return None
@@ -127,10 +209,20 @@ class DataFetcher:
         # kun til live tick-priser når terminalen faktisk kører (Windows).
         if MT5Fetcher.is_forex(symbol):
             df = await asyncio.to_thread(_fetch_yfinance, symbol, timeframe, limit)
-            if df is None:
-                return None
         else:
-            df = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            try:
+                df = await _fetch_with_retry_async(
+                    lambda: self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit),
+                    label=f"{symbol} {timeframe}",
+                )
+            except Exception as e:
+                logger.warning(f"OHLCV-fetch fejlede for {symbol} {timeframe}: {e}")
+                return None
+
+        # Fail-safe: ugyldige data caches ikke og bruges ikke — kalderen springer
+        # symbolet over denne runde frem for at handle på et hul i serien.
+        if not _validate_ohlcv(df, symbol):
+            return None
 
         self._cache[key] = (df, utc_now())
         logger.debug(f"Hentet {len(df)} bars for {symbol} {timeframe}")
@@ -154,7 +246,9 @@ class DataFetcher:
                     return None
                 return float(df["close"].iloc[-1])
 
-            ticker = await self.exchange.fetch_ticker(symbol)
+            ticker = await _fetch_with_retry_async(
+                lambda: self.exchange.fetch_ticker(symbol), label=symbol
+            )
             last = ticker.get("last") if ticker else None
             return float(last) if last is not None else None
         except Exception as e:
@@ -171,6 +265,8 @@ class DataFetcher:
         for symbol, result in zip(tasks.keys(), results):
             if isinstance(result, Exception):
                 logger.error(f"Fejl ved hentning af {symbol}: {result}")
+            elif result is None:
+                logger.warning(f"Springer {symbol} over — ingen valid data")
             else:
                 out[symbol] = result
         return out
