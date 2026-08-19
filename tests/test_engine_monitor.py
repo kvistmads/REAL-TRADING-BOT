@@ -41,6 +41,49 @@ CONFIG = {
 }
 
 
+class TestTimeStopIExitPath:
+    @pytest.mark.asyncio
+    async def test_time_stop_tjekkes_med_config_graense_og_bar_laengde(self):
+        tracker = FakeTracker([_trade("BTC/USDT")])
+        engine = _engine(tracker, FakeFetcher({"BTC/USDT": 50000.0}))
+
+        await engine._check_positions_fast()
+
+        # max_bars_held fra config (default 24) og 4h-baren fra timeframes.primary.
+        assert tracker.time_stop_calls == [({"BTC/USDT": 50000.0}, 24, 14400)]
+
+    @pytest.mark.asyncio
+    async def test_time_stop_exit_notificeres(self):
+        timed_out = _trade("BTC/USDT", exit_price=50500.0, status="closed", pnl=0.05)
+        tracker = FakeTracker([_trade("BTC/USDT")], timed_out=[timed_out])
+        engine = _engine(tracker, FakeFetcher({"BTC/USDT": 50500.0}))
+
+        await engine._check_positions_fast()
+
+        assert engine.notifier.closed == [("BTC/USDT", "Time-stop")]
+        assert engine.exchange.calls == []
+
+    @pytest.mark.asyncio
+    async def test_sl_tp_tjekkes_foer_time_stop(self):
+        """Et prisniveau der rammes samme runde vinder over holdetiden."""
+        tracker = FakeTracker([_trade("BTC/USDT")])
+        engine = _engine(tracker, FakeFetcher({"BTC/USDT": 50000.0}))
+        order: list[str] = []
+        tracker.check_sl_tp = _record(order, "sl_tp")
+        tracker.check_time_stop = _record(order, "time_stop", extra_args=True)
+
+        await engine._check_positions_fast()
+
+        assert order == ["sl_tp", "time_stop"]
+
+
+def _record(order: list[str], label: str, extra_args: bool = False):
+    async def call(*args, **kwargs):
+        order.append(label)
+        return []
+    return call
+
+
 class TestBreakevenIExitPath:
     @pytest.mark.asyncio
     async def test_breakeven_tjekkes_foer_sl_tp(self):
@@ -77,11 +120,14 @@ def _trade(symbol: str = "BTC/USDT", side: str = "long", **overrides) -> Trade:
 
 class FakeTracker:
     def __init__(self, open_positions: list[Trade] | None = None,
-                 closed: list[Trade] | None = None):
+                 closed: list[Trade] | None = None,
+                 timed_out: list[Trade] | None = None):
         self._open = open_positions or []
         self._closed = closed or []
+        self._timed_out = timed_out or []
         self.sl_tp_calls: list[dict] = []
         self.breakeven_calls: list[dict] = []
+        self.time_stop_calls: list[tuple] = []
 
     def get_open_positions(self) -> list[Trade]:
         return list(self._open)
@@ -93,6 +139,11 @@ class FakeTracker:
     async def check_sl_tp(self, prices: dict[str, float]) -> list[Trade]:
         self.sl_tp_calls.append(dict(prices))
         return list(self._closed)
+
+    async def check_time_stop(self, prices: dict[str, float], max_bars: int,
+                              bar_seconds: int) -> list[Trade]:
+        self.time_stop_calls.append((dict(prices), max_bars, bar_seconds))
+        return list(self._timed_out)
 
 
 class FakeFetcher:

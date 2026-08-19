@@ -9,6 +9,7 @@ trading:
   max_open_trades: 4
   leverage: 1
   breakeven_trigger_pct: 0.5   # Flyt SL til entry når 50% af TP-afstand er nået
+  max_bars_held: 24            # Time-stop: 24 barer × 4h = 4 døgn
 
 symbols:
   - BTC/USDT

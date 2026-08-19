@@ -153,6 +153,7 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
     trigger_pct = config.get("trading", {}).get("breakeven_trigger_pct", 0.5)
     breakeven_trigger = _breakeven_trigger(signal.side, entry_price, tp, trigger_pct)
     breakeven_activated = False
+    max_bars = config.get("trading", {}).get("max_bars_held", 24)
 
     exit_price = float(future_df.iloc[-1]["close"])
     reason = "end_of_data"
@@ -186,6 +187,15 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
             elif low <= tp:
                 exit_price, reason = tp, "take_profit"
         if reason != "end_of_data":
+            bars_held = offset
+            exit_time = bar.get("time")
+            break
+
+        # Time-stop: tjekkes EFTER SL/TP, så et niveau der rammes på samme bar
+        # vinder. En momentum-strategi skal ikke holde en position i månedsvis.
+        if max_bars and offset >= max_bars:
+            exit_price = float(bar["close"])
+            reason = "time_stop"
             bars_held = offset
             exit_time = bar.get("time")
             break

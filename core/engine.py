@@ -139,10 +139,10 @@ class TradingEngine:
         await self._apply_sl_tp(prices)
 
     async def _apply_sl_tp(self, prices: dict[str, float]) -> None:
-        """Luk positioner der har ramt SL/TP ved de givne priser og notificér.
+        """Luk positioner der har ramt SL/TP eller time-stop og notificér.
 
-        Breakeven tjekkes først: positioner der har nået deres trigger får SL
-        flyttet til entry, så det efterfølgende SL-tjek bruger det nye stop.
+        Rækkefølge: breakeven (flytter SL til entry) → SL/TP → time-stop, så det
+        opdaterede stop gælder med det samme og prisniveauer vinder over tiden.
         """
         if not prices:
             return
@@ -152,6 +152,18 @@ class TradingEngine:
             await self.notifier.send_trade_closed(trade, self._exit_reason(trade))
         if closed:
             logger.info(f"{len(closed)} positioner lukket via SL/TP")
+
+        # Time-stop efter SL/TP: rammer en position begge dele samme runde,
+        # er det niveauet der gælder — præcis som i backtesten.
+        timed_out = await self.position_tracker.check_time_stop(
+            prices,
+            self.config.get("trading", {}).get("max_bars_held", 24),
+            self._get_sleep_seconds(),
+        )
+        for trade in timed_out:
+            await self.notifier.send_trade_closed(trade, "Time-stop")
+        if timed_out:
+            logger.info(f"{len(timed_out)} positioner lukket via time-stop")
 
     async def _initialize(self) -> None:
         await init_db()

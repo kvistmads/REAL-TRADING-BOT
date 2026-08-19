@@ -184,6 +184,33 @@ class PositionTracker:
                 activated.append(trade)
         return activated
 
+    async def check_time_stop(
+        self, current_prices: dict[str, float], max_bars_held: int, bar_seconds: int
+    ) -> list[Trade]:
+        """Luk positioner der har været åbne >= max_bars_held barer.
+
+        Holdetiden måles i vægur-tid siden entry omregnet til barer, ikke i antal
+        faktiske barer — monitoren kender kun tiden, ikke OHLCV-serien. Samme
+        grænse som backtestens time-stop (config: trading.max_bars_held).
+        """
+        if not max_bars_held or not bar_seconds:
+            return []
+        now = utc_now()
+        to_close: list[tuple[str, float]] = []
+
+        for trade_id, trade in list(self._open_positions.items()):
+            price = current_prices.get(trade.symbol)
+            if price is None or trade.entry_time is None:
+                continue
+            bars_held = (now - trade.entry_time).total_seconds() / bar_seconds
+            if bars_held >= max_bars_held:
+                to_close.append((trade_id, price))
+
+        return [
+            await self.close_position(trade_id, price, "time_stop")
+            for trade_id, price in to_close
+        ]
+
     async def check_sl_tp(self, current_prices: dict[str, float]) -> list[Trade]:
         to_close: list[tuple[str, float, str]] = []
 
