@@ -62,6 +62,66 @@ class TestSimulateTrade:
         assert round(trade["exit_price"], 2) == 103.0
 
 
+class TestPnlFortegn:
+    """Eksplicit dokumentation af PnL-formlen — særligt for shorts, hvor et
+    prisfald er en gevinst. Beskytter mod fortegnsregressioner i simulate_trade."""
+
+    def test_short_pnl_take_profit(self):
+        # entry=100, tp=80 → prisen faldt 20% → +20%
+        signal = Signal("s", "BTC/USDT", "short", 0.7, "4h", {}, sl_price=110.0, tp_price=80.0)
+        future = _future([(100, 100, 100, 100), (95, 96, 79, 80)])
+        trade = simulate_trade(signal, future, CONFIG)
+        assert trade["reason"] == "take_profit"
+        assert trade["exit_price"] == 80.0
+        assert trade["pnl_pct"] == 20.0
+        assert trade["pnl"] == 1.0  # 20% af 5 USDT
+
+    def test_short_pnl_stop_loss(self):
+        # entry=100, sl=110 → prisen steg 10% → -10%
+        signal = Signal("s", "BTC/USDT", "short", 0.7, "4h", {}, sl_price=110.0, tp_price=80.0)
+        future = _future([(100, 100, 100, 100), (105, 111, 104, 110)])
+        trade = simulate_trade(signal, future, CONFIG)
+        assert trade["reason"] == "stop_loss"
+        assert trade["exit_price"] == 110.0
+        assert trade["pnl_pct"] == -10.0
+        assert trade["pnl"] == -0.5
+
+    def test_short_pnl_end_of_data(self):
+        # entry=100, sidste close=95 → prisen faldt 5% → +5%
+        signal = Signal("s", "BTC/USDT", "short", 0.7, "4h", {}, sl_price=110.0, tp_price=80.0)
+        future = _future([(100, 100, 100, 100), (98, 99, 94, 95)])
+        trade = simulate_trade(signal, future, CONFIG)
+        assert trade["reason"] == "end_of_data"
+        assert trade["pnl_pct"] == 5.0
+
+    def test_long_pnl_take_profit(self):
+        # entry=100, tp=120 → +20%
+        signal = Signal("s", "BTC/USDT", "long", 0.7, "4h", {}, sl_price=90.0, tp_price=120.0)
+        future = _future([(100, 100, 100, 100), (110, 121, 109, 120)])
+        trade = simulate_trade(signal, future, CONFIG)
+        assert trade["reason"] == "take_profit"
+        assert trade["pnl_pct"] == 20.0
+        assert trade["pnl"] == 1.0
+
+    def test_long_pnl_stop_loss(self):
+        signal = Signal("s", "BTC/USDT", "long", 0.7, "4h", {}, sl_price=90.0, tp_price=120.0)
+        future = _future([(100, 100, 100, 100), (95, 96, 89, 90)])
+        trade = simulate_trade(signal, future, CONFIG)
+        assert trade["reason"] == "stop_loss"
+        assert trade["pnl_pct"] == -10.0
+
+    def test_long_og_short_er_spejlvendte(self):
+        """Samme prisbevægelse skal give modsat fortegn for long og short."""
+        bars = [(100, 100, 100, 100), (98, 99, 94, 95)]
+        long_trade = simulate_trade(
+            Signal("s", "BTC/USDT", "long", 0.7, "4h", {}, sl_price=80.0, tp_price=120.0),
+            _future(bars), CONFIG)
+        short_trade = simulate_trade(
+            Signal("s", "BTC/USDT", "short", 0.7, "4h", {}, sl_price=120.0, tp_price=80.0),
+            _future(bars), CONFIG)
+        assert long_trade["pnl_pct"] == -short_trade["pnl_pct"]
+
+
 class TestMetrics:
     def test_empty(self):
         m = metrics.compute([])
