@@ -12,12 +12,29 @@ from strategies.base import Signal
 logger = logging.getLogger(__name__)
 
 
+def compute_breakeven_trigger(side: str, entry_price: float, tp_price: float,
+                              pct: float) -> float | None:
+    """Prisen hvor SL flyttes til entry: `pct` af vejen fra entry mod TP.
+
+    Samme formel som backtest/runner._breakeven_trigger, så live og backtest
+    flytter stoppet på samme sted. pct <= 0 → None (breakeven deaktiveret).
+    """
+    if not pct or pct <= 0:
+        return None
+    if side == "long":
+        return entry_price + pct * (tp_price - entry_price)
+    return entry_price - pct * (entry_price - tp_price)
+
+
 class PositionTracker:
     def __init__(self, config: dict):
         self.config = config
         self._open_positions: dict[str, Trade] = {}
         self._daily_pnl: float = 0.0
         self._daily_reset_date: str = utc_now().strftime("%Y-%m-%d")
+        # Hvilke trades der har fået SL flyttet til entry. Kun i memory — SL'en
+        # selv persisteres i DB, så en genstart genopdager status via sl_price.
+        self._breakeven_activated: dict[str, bool] = {}
 
     async def load_open_positions(self) -> None:
         from sqlalchemy import select
@@ -27,6 +44,10 @@ class PositionTracker:
             )
             for trade in result.scalars().all():
                 self._open_positions[trade.id] = trade
+                # SL == entry betyder at breakeven allerede blev aktiveret før
+                # genstarten — genskab flaget så vi ikke logger aktiveringen igen.
+                if trade.sl_price == trade.entry_price:
+                    self._breakeven_activated[trade.id] = True
         logger.info(f"Indlæst {len(self._open_positions)} åbne positioner fra DB")
 
     async def open_position(
@@ -41,6 +62,10 @@ class PositionTracker:
     ) -> Trade:
         stake = self.config["trading"]["stake_amount"]
         quantity = stake / current_price
+        trigger_pct = self.config.get("trading", {}).get("breakeven_trigger_pct", 0.5)
+        breakeven_trigger = compute_breakeven_trigger(
+            signal.side, current_price, tp_price, trigger_pct
+        )
 
         trade = Trade(
             id=str(uuid.uuid4()),
@@ -62,6 +87,7 @@ class PositionTracker:
             market_regime=market_regime,
             signal_data=signal.metadata,
             dry_run=self.config["trading"]["dry_run"],
+            breakeven_trigger=breakeven_trigger,
         )
 
         async with async_session_maker() as session:
@@ -105,6 +131,7 @@ class PositionTracker:
 
         self._daily_pnl += pnl
         del self._open_positions[trade_id]
+        self._breakeven_activated.pop(trade_id, None)
 
         logger.info(
             f"POSITION LUKKET ({reason}): {trade.side} {trade.symbol} "
@@ -112,6 +139,50 @@ class PositionTracker:
             f"PnL={pnl:.2f} USDT ({pnl_pct:.1f}%)"
         )
         return trade
+
+    def is_breakeven_activated(self, trade_id: str) -> bool:
+        return self._breakeven_activated.get(trade_id, False)
+
+    async def activate_breakeven(self, trade_id: str, entry_price: float) -> None:
+        """Flyt SL til entry-prisen (in-memory + DB) og marker trade'en."""
+        trade = self._open_positions.get(trade_id)
+        if trade is None:
+            return
+        trade.sl_price = entry_price
+        self._breakeven_activated[trade_id] = True
+
+        async with async_session_maker() as session:
+            db_trade = await session.get(Trade, trade_id)
+            if db_trade:
+                db_trade.sl_price = entry_price
+                await session.commit()
+
+        logger.info(
+            f"BREAKEVEN: {trade.side} {trade.symbol} — SL flyttet til entry "
+            f"{entry_price:.4f} [{trade.strategy_id}]"
+        )
+
+    async def check_breakeven(self, current_prices: dict[str, float]) -> list[Trade]:
+        """Aktivér breakeven på positioner der har nået deres trigger-pris.
+
+        Køres FØR check_sl_tp, så en pris der både trigger breakeven og ligger
+        under det oprindelige stop lukker i 0 frem for med tab.
+        """
+        activated: list[Trade] = []
+        for trade_id, trade in list(self._open_positions.items()):
+            if self.is_breakeven_activated(trade_id) or trade.breakeven_trigger is None:
+                continue
+            price = current_prices.get(trade.symbol)
+            if price is None:
+                continue
+            hit = (
+                price >= trade.breakeven_trigger if trade.side == "long"
+                else price <= trade.breakeven_trigger
+            )
+            if hit:
+                await self.activate_breakeven(trade_id, trade.entry_price)
+                activated.append(trade)
+        return activated
 
     async def check_sl_tp(self, current_prices: dict[str, float]) -> list[Trade]:
         to_close: list[tuple[str, float, str]] = []

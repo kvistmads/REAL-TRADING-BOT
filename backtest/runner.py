@@ -98,16 +98,45 @@ def fetch_data(symbol: str, timeframe: str = "4h") -> pd.DataFrame:
 # Trade-simulering (uændret kontrakt: df med 'time'-kolonne)
 # ---------------------------------------------------------------------------
 
-def _resolve_sl_tp(signal, entry_price: float, config: dict) -> tuple[float, float]:
+def _resolve_sl_tp(signal, entry_price: float, config: dict,
+                   atr: float | None = None) -> tuple[float, float]:
+    """SL/TP for en trade. Chart-baserede niveauer fra signalet vinder altid.
+
+    Ellers volatilitetstilpasset: SL-afstand = atr_sl_multiplier × ATR(14) og
+    TP-afstand = tp_rr_ratio × SL-afstand (default 2.0 → uændret 2:1 R:R).
+    Uden brugbar ATR bruges de faste sl_pct/tp_pct fra config som fallback.
+    """
     if signal.sl_price is not None and signal.tp_price is not None:
         return signal.sl_price, signal.tp_price
+
     asset_class = BaseStrategy.get_asset_class(signal.symbol)
     defaults = config["risk_defaults"][asset_class]
-    sl_pct = defaults["sl_pct"] / 100
-    tp_pct = defaults["tp_pct"] / 100
+
+    if atr is not None and atr == atr and atr > 0:  # atr == atr filtrerer NaN
+        sl_dist = defaults.get("atr_sl_multiplier", 2.0) * atr
+        tp_dist = defaults.get("tp_rr_ratio", 2.0) * sl_dist
+    else:
+        sl_dist = entry_price * defaults["sl_pct"] / 100
+        tp_dist = entry_price * defaults["tp_pct"] / 100
+
     if signal.side == "long":
-        return entry_price * (1 - sl_pct), entry_price * (1 + tp_pct)
-    return entry_price * (1 + sl_pct), entry_price * (1 - tp_pct)
+        return entry_price - sl_dist, entry_price + tp_dist
+    return entry_price + sl_dist, entry_price - tp_dist
+
+
+def _breakeven_trigger(side: str, entry_price: float, tp: float, pct: float) -> float:
+    """Prisen hvor SL flyttes til entry: `pct` af vejen fra entry mod TP."""
+    if side == "long":
+        return entry_price + pct * (tp - entry_price)
+    return entry_price - pct * (entry_price - tp)
+
+
+def _entry_atr(future_df: pd.DataFrame) -> float | None:
+    """ATR(14) på udførelsesbaren. None hvis kolonnen mangler eller er NaN."""
+    if "atr_14" not in future_df.columns:
+        return None
+    value = float(future_df["atr_14"].iloc[0])
+    return None if value != value else value  # NaN → None
 
 
 def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
@@ -117,8 +146,13 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
     Lukker ved SL, TP eller sidste bar. SL tjekkes før TP samme bar (konservativt).
     """
     entry_price = float(future_df.iloc[0]["open"])
-    sl, tp = _resolve_sl_tp(signal, entry_price, config)
+    atr = _entry_atr(future_df)
+    sl, tp = _resolve_sl_tp(signal, entry_price, config, atr=atr)
     stake = config["trading"]["stake_amount"]
+
+    trigger_pct = config.get("trading", {}).get("breakeven_trigger_pct", 0.5)
+    breakeven_trigger = _breakeven_trigger(signal.side, entry_price, tp, trigger_pct)
+    breakeven_activated = False
 
     exit_price = float(future_df.iloc[-1]["close"])
     reason = "end_of_data"
@@ -128,14 +162,27 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
     for offset in range(1, len(future_df)):
         bar = future_df.iloc[offset]
         high, low = float(bar["high"]), float(bar["low"])
+
+        # Breakeven: når prisen har bevæget sig trigger_pct af vejen mod TP
+        # flyttes SL til entry. Tjekkes før exit-tjekket på samme bar, så en bar
+        # der både trigger og retracerer lukkes i 0 frem for på det gamle SL.
+        if not breakeven_activated:
+            if (signal.side == "long" and high >= breakeven_trigger) or (
+                signal.side == "short" and low <= breakeven_trigger
+            ):
+                sl = entry_price
+                breakeven_activated = True
+
         if signal.side == "long":
             if low <= sl:
-                exit_price, reason = sl, "stop_loss"
+                exit_price = sl
+                reason = "breakeven" if breakeven_activated else "stop_loss"
             elif high >= tp:
                 exit_price, reason = tp, "take_profit"
         else:
             if high >= sl:
-                exit_price, reason = sl, "stop_loss"
+                exit_price = sl
+                reason = "breakeven" if breakeven_activated else "stop_loss"
             elif low <= tp:
                 exit_price, reason = tp, "take_profit"
         if reason != "end_of_data":
@@ -161,6 +208,7 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
         "pnl_pct": round(pnl_pct, 4),
         "reason": reason,
         "bars_held": bars_held,
+        "breakeven_activated": breakeven_activated,
     }
 
 
@@ -428,7 +476,8 @@ def _save_trades_csv(all_trades: list[dict]) -> Path | None:
     report.RESULTS_DIR.mkdir(exist_ok=True)
     path = report.RESULTS_DIR / f"trades_{date.today().isoformat()}.csv"
     fields = ["strategy_id", "symbol", "side", "entry_time", "exit_time",
-              "entry_price", "exit_price", "pnl", "pnl_pct", "reason", "bars_held"]
+              "entry_price", "exit_price", "pnl", "pnl_pct", "reason", "bars_held",
+              "breakeven_activated"]
     with path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()

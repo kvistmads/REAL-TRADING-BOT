@@ -56,6 +56,7 @@ def save_csv(trades: list[dict], meta: dict) -> Path:
     fields = [
         "symbol", "side", "strategy_id", "entry_time", "exit_time",
         "entry_price", "exit_price", "pnl", "pnl_pct", "reason", "bars_held",
+        "breakeven_activated",
     ]
     with path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")

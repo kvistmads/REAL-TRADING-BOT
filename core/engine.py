@@ -139,9 +139,14 @@ class TradingEngine:
         await self._apply_sl_tp(prices)
 
     async def _apply_sl_tp(self, prices: dict[str, float]) -> None:
-        """Luk positioner der har ramt SL/TP ved de givne priser og notificér."""
+        """Luk positioner der har ramt SL/TP ved de givne priser og notificér.
+
+        Breakeven tjekkes først: positioner der har nået deres trigger får SL
+        flyttet til entry, så det efterfølgende SL-tjek bruger det nye stop.
+        """
         if not prices:
             return
+        await self.position_tracker.check_breakeven(prices)
         closed = await self.position_tracker.check_sl_tp(prices)
         for trade in closed:
             await self.notifier.send_trade_closed(trade, self._exit_reason(trade))
@@ -267,7 +272,7 @@ class TradingEngine:
                     continue
 
                 # Beregn SL/TP og åbn position
-                sl_price, tp_price = self._resolve_sl_tp(signal, current_price)
+                sl_price, tp_price = self._resolve_sl_tp(signal, current_price, df=df)
 
                 order = await self.exchange.place_order(signal,
                     self.config["trading"]["stake_amount"] / current_price,
@@ -336,23 +341,39 @@ class TradingEngine:
             logger.warning("News confirmation-hook fejlede for %s: %s", symbol, e)
             return signal
 
-    def _resolve_sl_tp(self, signal: Signal, current_price: float) -> tuple[float, float]:
+    def _resolve_sl_tp(self, signal: Signal, current_price: float,
+                       df=None) -> tuple[float, float]:
+        """SL/TP for et signal — samme logik som backtest/runner._resolve_sl_tp.
+
+        Chart-baserede niveauer fra signalet vinder. Ellers volatilitetstilpasset:
+        SL-afstand = atr_sl_multiplier × ATR(14) på seneste bar, TP-afstand =
+        tp_rr_ratio × SL-afstand. Uden df/ATR bruges de faste sl_pct/tp_pct.
+        """
         if signal.sl_price is not None and signal.tp_price is not None:
             return signal.sl_price, signal.tp_price
 
         asset_class = BaseStrategy.get_asset_class(signal.symbol)
         defaults = self.config["risk_defaults"][asset_class]
-        sl_pct = defaults["sl_pct"] / 100
-        tp_pct = defaults["tp_pct"] / 100
+        atr = self._latest_atr(df)
+
+        if atr is not None:
+            sl_dist = defaults.get("atr_sl_multiplier", 2.0) * atr
+            tp_dist = defaults.get("tp_rr_ratio", 2.0) * sl_dist
+        else:
+            sl_dist = current_price * defaults["sl_pct"] / 100
+            tp_dist = current_price * defaults["tp_pct"] / 100
 
         if signal.side == "long":
-            sl = current_price * (1 - sl_pct)
-            tp = current_price * (1 + tp_pct)
-        else:
-            sl = current_price * (1 + sl_pct)
-            tp = current_price * (1 - tp_pct)
+            return current_price - sl_dist, current_price + tp_dist
+        return current_price + sl_dist, current_price - tp_dist
 
-        return sl, tp
+    @staticmethod
+    def _latest_atr(df) -> float | None:
+        """ATR(14) på seneste bar. None hvis df/kolonne mangler eller er NaN/<=0."""
+        if df is None or "atr_14" not in getattr(df, "columns", []):
+            return None
+        value = float(df["atr_14"].iloc[-1])
+        return value if value == value and value > 0 else None  # value == value: ikke NaN
 
     def _get_sleep_seconds(self) -> int:
         primary_tf = self.config["timeframes"]["primary"]
@@ -366,7 +387,10 @@ class TradingEngine:
         tp_hit = (trade.side == "long" and trade.exit_price >= trade.tp_price) or (
             trade.side == "short" and trade.exit_price <= trade.tp_price
         )
-        return "TP hit" if tp_hit else "SL hit"
+        if tp_hit:
+            return "TP hit"
+        # SL flyttet til entry (breakeven) → tradet lukkede i nul, ikke med tab.
+        return "Breakeven" if trade.sl_price == trade.entry_price else "SL hit"
 
     async def _maybe_daily_summary(self) -> None:
         now = datetime.now()

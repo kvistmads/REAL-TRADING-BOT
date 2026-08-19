@@ -62,6 +62,9 @@ class Trade(Base):
     # aktivt experiment). Udfyldes af execution/ab_router når et eksperiment kører.
     # create_all tilføjer kolonnen additivt — ingen migration nødvendig.
     ab_arm: Mapped[Optional[str]] = mapped_column(String, nullable=True, default=None)
+    # Prisen hvor SL flyttes til entry (breakeven). Beregnes ved trade-åbning ud fra
+    # trading.breakeven_trigger_pct; None = breakeven deaktiveret for trade'en.
+    breakeven_trigger: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)
 
 
 class SignalLog(Base):

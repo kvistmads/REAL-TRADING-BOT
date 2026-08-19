@@ -8,6 +8,7 @@ trading:
   stake_amount: 5
   max_open_trades: 4
   leverage: 1
+  breakeven_trigger_pct: 0.5   # Flyt SL til entry når 50% af TP-afstand er nået
 
 symbols:
   - BTC/USDT
@@ -43,10 +44,12 @@ gates:
     max_volatile_atr_pct: 4.0
     volatile_min_confidence: 0.75
 
+# sl_pct/tp_pct er FALLBACK når ATR ikke er tilgængelig. Ellers:
+#   SL-afstand = atr_sl_multiplier × ATR(14),  TP-afstand = tp_rr_ratio × SL-afstand.
 risk_defaults:
-  crypto:   {sl_pct: 10.0, tp_pct: 20.0}
-  forex:    {sl_pct: 1.5,  tp_pct: 3.0}
-  gold:     {sl_pct: 3.0,  tp_pct: 6.0}
+  crypto:   {sl_pct: 10.0, tp_pct: 20.0, atr_sl_multiplier: 2.0, tp_rr_ratio: 2.0}
+  forex:    {sl_pct: 1.5,  tp_pct: 3.0,  atr_sl_multiplier: 2.0, tp_rr_ratio: 2.0}
+  gold:     {sl_pct: 3.0,  tp_pct: 6.0,  atr_sl_multiplier: 2.0, tp_rr_ratio: 2.0}
 
 notifications:
   telegram:

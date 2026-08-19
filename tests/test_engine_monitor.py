@@ -41,6 +41,30 @@ CONFIG = {
 }
 
 
+class TestBreakevenIExitPath:
+    @pytest.mark.asyncio
+    async def test_breakeven_tjekkes_foer_sl_tp(self):
+        """Rækkefølgen er kritisk: SL skal være flyttet før SL-tjekket kører."""
+        tracker = FakeTracker([_trade("BTC/USDT")])
+        engine = _engine(tracker, FakeFetcher({"BTC/USDT": 55000.0}))
+
+        await engine._check_positions_fast()
+
+        assert tracker.breakeven_calls == [{"BTC/USDT": 55000.0}]
+        assert tracker.sl_tp_calls == [{"BTC/USDT": 55000.0}]
+
+    @pytest.mark.asyncio
+    async def test_breakeven_exit_rapporteres_ikke_som_sl(self):
+        closed = _trade("BTC/USDT", sl_price=50000.0, exit_price=50000.0,
+                        status="closed", pnl=0.0)
+        tracker = FakeTracker([_trade("BTC/USDT")], closed=[closed])
+        engine = _engine(tracker, FakeFetcher({"BTC/USDT": 50000.0}))
+
+        await engine._check_positions_fast()
+
+        assert engine.notifier.closed == [("BTC/USDT", "Breakeven")]
+
+
 def _trade(symbol: str = "BTC/USDT", side: str = "long", **overrides) -> Trade:
     defaults = dict(
         id=f"t-{symbol}-{side}", strategy_id="trend_momentum", symbol=symbol, side=side,
@@ -57,9 +81,14 @@ class FakeTracker:
         self._open = open_positions or []
         self._closed = closed or []
         self.sl_tp_calls: list[dict] = []
+        self.breakeven_calls: list[dict] = []
 
     def get_open_positions(self) -> list[Trade]:
         return list(self._open)
+
+    async def check_breakeven(self, prices: dict[str, float]) -> list[Trade]:
+        self.breakeven_calls.append(dict(prices))
+        return []
 
     async def check_sl_tp(self, prices: dict[str, float]) -> list[Trade]:
         self.sl_tp_calls.append(dict(prices))
