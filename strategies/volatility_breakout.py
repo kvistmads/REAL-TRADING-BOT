@@ -116,7 +116,10 @@ class VolatilityBreakout(BaseStrategy):
 
         volume_ratio = volume / volume_ma_20
         squeeze_intensity = clamp(1 - (bb_width_squeeze / p90), 0, 1)
-        volume_strength = clamp((volume_ratio - 1.5) / 1.0, 0, 1)
+        # Baseline = gate-tærsklen selv, ikke et hardkodet tal: volume_strength
+        # skal starte på 0 præcis dér hvor gaten slipper igennem, uanset hvad
+        # min_volume_ratio er sat til via params.
+        volume_strength = clamp((volume_ratio - min_volume_ratio) / 1.0, 0, 1)
         macd_strength = clamp(abs(macd_hist) / atr_now, 0, 1)
         confidence = clamp(
             0.40 + 0.20 * squeeze_intensity + 0.25 * volume_strength
