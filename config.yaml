@@ -115,3 +115,5 @@ reflection:
     - sl_pct
     - tp_pct
     - total_capital
+    - atr_sl_multiplier
+    - tp_rr_ratio
