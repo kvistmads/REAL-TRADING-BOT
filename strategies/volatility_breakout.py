@@ -85,7 +85,11 @@ class VolatilityBreakout(BaseStrategy):
         if atr_now <= 0 or volume_ma_20 <= 0 or p90 <= 0:
             return None
 
-        levels = find_sr_levels(df, self.SR_LOOKBACK, self.SWING_WINDOW)
+        # ref = prisen FØR udbruddet, ikke seneste close: det niveau vi leder efter
+        # er netop brudt, så målt fra close ville det ligge på den forkerte side.
+        levels = find_sr_levels(
+            df, self.SR_LOOKBACK, self.SWING_WINDOW, ref=price_at_squeeze
+        )
         resistance = levels["resistance"]
         support = levels["support"]
 

@@ -259,29 +259,36 @@ def find_swing_points(series: pd.Series, window: int = 5) -> tuple[list[int], li
     return highs, lows
 
 
-def find_sr_levels(df: pd.DataFrame, lookback: int = 50, window: int = 5) -> dict:
+def find_sr_levels(
+    df: pd.DataFrame, lookback: int = 50, window: int = 5, ref: float | None = None
+) -> dict:
     """
-    Nærmeste resistance/support ift. seneste close, fundet blandt fraktal-pivots
-    inden for de seneste `lookback` barer. Resistance kommer fra swing highs i
-    high-serien, support fra swing lows i low-serien.
+    Nærmeste resistance/support ift. `ref` (default: seneste close), fundet blandt
+    fraktal-pivots inden for de seneste `lookback` barer. Resistance kommer fra
+    swing highs i high-serien, support fra swing lows i low-serien.
+
+    Kun pivots på den rigtige side af `ref` tæller: resistance ligger OVER ref,
+    support UNDER. Uden det filter valgtes bare det nærmeste pivot uanset side, så
+    et pivot på den forkerte side kunne maskere det reelle niveau. Breakout-kaldere
+    skal sende prisen FØR udbruddet som `ref` — bruger man seneste close, ligger et
+    netop brudt niveau pr. definition på den forkerte side og filtreres væk.
+
     Returnerer {'resistance': float | None, 'support': float | None}.
     """
     recent = df.iloc[-lookback:]
-    ref = float(recent["close"].iloc[-1])
+    if ref is None:
+        ref = float(recent["close"].iloc[-1])
 
     swing_highs, _ = find_swing_points(recent["high"], window)
     _, swing_lows = find_swing_points(recent["low"], window)
 
-    resistance = None
-    if swing_highs:
-        high_vals = recent["high"].to_numpy(dtype=float)
-        resistance = float(min((high_vals[i] for i in swing_highs),
-                               key=lambda v: abs(v - ref)))
+    high_vals = recent["high"].to_numpy(dtype=float)
+    low_vals = recent["low"].to_numpy(dtype=float)
+    above = [high_vals[i] for i in swing_highs if high_vals[i] > ref]
+    below = [low_vals[i] for i in swing_lows if low_vals[i] < ref]
 
-    support = None
-    if swing_lows:
-        low_vals = recent["low"].to_numpy(dtype=float)
-        support = float(min((low_vals[i] for i in swing_lows),
-                            key=lambda v: abs(v - ref)))
+    # Nærmeste på hver side: laveste pivot over ref, højeste pivot under ref.
+    resistance = float(min(above)) if above else None
+    support = float(max(below)) if below else None
 
     return {"resistance": resistance, "support": support}
