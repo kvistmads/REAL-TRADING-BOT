@@ -123,11 +123,24 @@ class TestCacheEviction:
 
 
 class TestDeltBundle:
+    # Samme skip-liste som registry.load_strategies() — det er dens definition af
+    # hvad der tæller som et strategi-modul.
+    IKKE_STRATEGIER = {"__init__", "base", "registry"}
+
     def test_strategierne_kalder_ikke_add_all_selv(self):
-        """Del B: den tunge beregning sker ét sted — i engine/runner, ikke pr. strategi."""
-        for name in ("trend_momentum", "reversal_context", "volatility_breakout"):
-            source = Path(f"strategies/{name}.py").read_text()
-            assert "add_all" not in source, f"{name} kalder add_all internt"
+        """Del B: den tunge beregning sker ét sted — i engine/runner, ikke pr. strategi.
+
+        Glob frem for en håndholdt liste, så en ny strategi er dækket fra den dag
+        filen lander, og en fjernet strategi ikke efterlader et dødt navn her.
+        """
+        moduler = [p for p in sorted(Path("strategies").glob("*.py"))
+                   if p.stem not in self.IKKE_STRATEGIER]
+        # Uden denne ville et glob der ikke matcher noget give en grønt lysende
+        # test der ikke tjekker en eneste fil.
+        assert moduler, "ingen strategi-moduler fundet i strategies/"
+        for path in moduler:
+            assert "add_all" not in path.read_text(), \
+                f"{path.stem} kalder add_all internt"
 
     @pytest.mark.asyncio
     async def test_engine_deler_samme_enriched_df_med_alle_strategier(self, monkeypatch):
