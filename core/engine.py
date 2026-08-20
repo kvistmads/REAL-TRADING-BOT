@@ -188,6 +188,16 @@ class TradingEngine:
         # Skriv en initial status med det samme, så dashboardet viser live data ved opstart.
         await self._write_dashboard_status()
 
+    def _config_params(self, strategy_id: str) -> dict:
+        """Parameter-overrides fra ``strategies.params.<strategy_id>`` i config.
+
+        Det er her reflection-loopets auto-apply skriver sine ændringer
+        (reflection/applier.py). Uden dette opslag nåede de aldrig frem til
+        strategien, og botten kørte videre på klassens defaults.
+        """
+        params = (self.config.get("strategies", {}) or {}).get("params") or {}
+        return dict(params.get(strategy_id) or {})
+
     async def _tick(self) -> None:
         primary_tf = self.config["timeframes"]["primary"]
         symbols = self.config["symbols"]
@@ -220,10 +230,14 @@ class TradingEngine:
                     pass
 
             for strategy in self.strategies:
-                # A/B: kør signal på arm-tildelte params hvis et eksperiment er aktivt,
-                # ellers tom dict → strategiens defaults (assignment=None, ab_arm=None).
+                # Params lagvis: config-overrides som base, aktiv A/B-arm ovenpå.
+                # Arm A (kontrol) har tom params-dict og er dermed ren config;
+                # arm B's ene parameter vinder over config. Uden eksperiment:
+                # kun config, og uden config-entry: strategiens egne defaults.
                 assignment = get_assignment(strategy.name)
-                params = assignment.params if assignment else {}
+                params = self._config_params(strategy.name)
+                if assignment:
+                    params.update(assignment.params)
                 try:
                     signal = strategy.generate_signal(df, symbol, params=params)
                 except Exception as e:

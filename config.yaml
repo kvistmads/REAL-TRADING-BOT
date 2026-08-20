@@ -26,9 +26,12 @@ timeframes:
 strategies:
   enabled:
     - trend_momentum
-    - reversal_context
     - volatility_breakout
   min_confidence: 0.45
+  params:
+    volatility_breakout:
+      squeeze_percentile: 25
+      min_volume_ratio: 1.2
 
 gates:
   confluence:
