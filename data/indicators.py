@@ -92,7 +92,9 @@ def add_adx(df: pd.DataFrame, length: int = 14) -> pd.DataFrame:
     return df
 
 
-def add_all(df: pd.DataFrame) -> pd.DataFrame:
+def _compute_all(df: pd.DataFrame) -> pd.DataFrame:
+    """Beregn alle add_*-indikatorer på en kopi (kalderens df muteres ikke)."""
+    df = df.copy()
     df = add_rsi(df)
     df = add_macd(df)
     df = add_bollinger(df)
@@ -101,6 +103,61 @@ def add_all(df: pd.DataFrame) -> pd.DataFrame:
     df = add_atr(df)
     df = add_adx(df)
     return df
+
+
+# add_all er den tunge del af hvert tick (weekly-profileringen har peget på den
+# tre uger i træk). Engine kalder den én gang pr. symbol og deler resultatet med
+# alle strategier; cachen fanger de resterende gentagelser — fx backtestens
+# suite, hvor de samme barer køres igennem for hver strategi.
+_indicator_cache: dict[tuple, pd.DataFrame] = {}
+_CACHE_MAX_ENTRIES = 50
+
+
+def _cache_key(df: pd.DataFrame) -> tuple:
+    """Nøgle der identificerer præcis dette datasæt.
+
+    De 5 seneste barers tidsstempel + OHLCV plus rækkeantallet. Kun indekset er
+    IKKE nok: to symboler hentet med samme limit har identisk RangeIndex, og
+    BTC ville så få ETH's indikatorer serveret fra cachen.
+    """
+    tail = df.tail(5)
+    stamps = tail["time"] if "time" in df.columns else tail.index.to_series()
+    values = tuple(
+        tuple(float(v) for v in tail[col])
+        for col in ("open", "high", "low", "close", "volume")
+        if col in df.columns
+    )
+    return (len(df), tuple(str(t) for t in stamps), values)
+
+
+def add_all(df: pd.DataFrame) -> pd.DataFrame:
+    """Alle indikatorer på df — memoiseret på datasættets indhold.
+
+    Returnerer den cachede ramme direkte; kalderne behandler den som read-only
+    (strategierne bruger calculate_*-API'et og muterer ikke deres input).
+    """
+    if df is None or df.empty:
+        return df
+
+    try:
+        key = _cache_key(df)
+    except (TypeError, ValueError):  # uventet dtype → spring cachen over
+        return _compute_all(df)
+
+    cached = _indicator_cache.get(key)
+    if cached is not None:
+        return cached
+
+    result = _compute_all(df)
+    _indicator_cache[key] = result
+    if len(_indicator_cache) > _CACHE_MAX_ENTRIES:
+        del _indicator_cache[next(iter(_indicator_cache))]  # FIFO: ældste ryger
+    return result
+
+
+def clear_indicator_cache() -> None:
+    """Tøm indikator-cachen (tests og langtidskørsler der skifter datasæt)."""
+    _indicator_cache.clear()
 
 
 # ---------------------------------------------------------------------------

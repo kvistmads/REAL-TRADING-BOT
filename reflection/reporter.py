@@ -13,6 +13,8 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+from reflection.signal_analyzer import format_signal_section, format_signal_telegram
+
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
@@ -86,9 +88,17 @@ def format_nightly_telegram(
     pending: list[dict],
     report_only: list[dict],
     report_path: str,
+    signal_stats: dict | None = None,
 ) -> str:
-    """Byg den ene Telegram-besked per nightly-kørsel (PRD Opgave 4)."""
-    lines = [f"🔄 Nightly analyse {date_str} — {n_trades} trades analyseret", ""]
+    """Byg den ene Telegram-besked per nightly-kørsel (PRD Opgave 4).
+
+    Signal-statistikken kommer med uanset antal trades — med 0 lukkede trades er
+    den den eneste information beskeden ellers ville indeholde.
+    """
+    lines = [f"🔄 Nightly analyse {date_str} — {n_trades} trades analyseret"]
+    if signal_stats is not None:
+        lines.append(format_signal_telegram(signal_stats))
+    lines.append("")
 
     lines.append(f"AUTO-APPLIED ({len(auto_applied)}):")
     if auto_applied:
@@ -118,11 +128,17 @@ def format_nightly_telegram(
     return "\n".join(lines)
 
 
-def write_nightly_report(date_str: str, observations: list[dict], reports_dir: str = REPORTS_DIR) -> str:
+def write_nightly_report(date_str: str, observations: list[dict],
+                         reports_dir: str = REPORTS_DIR,
+                         signal_stats: dict | None = None,
+                         lookback_days: int = 30) -> str:
     """Skriv fuld nightly-markdownrapport. Returnér stien."""
     Path(reports_dir).mkdir(parents=True, exist_ok=True)
     path = f"{reports_dir}/nightly_{date_str}.md"
     lines = [f"# Nightly analyse-rapport {date_str}", ""]
+    if signal_stats is not None:
+        lines.append(format_signal_section(signal_stats, lookback_days))
+        lines.append("")
     if not observations:
         lines.append("Ingen observationer genereret.")
     for o in observations:

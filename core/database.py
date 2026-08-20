@@ -62,6 +62,9 @@ class Trade(Base):
     # aktivt experiment). Udfyldes af execution/ab_router når et eksperiment kører.
     # create_all tilføjer kolonnen additivt — ingen migration nødvendig.
     ab_arm: Mapped[Optional[str]] = mapped_column(String, nullable=True, default=None)
+    # Prisen hvor SL flyttes til entry (breakeven). Beregnes ved trade-åbning ud fra
+    # trading.breakeven_trigger_pct; None = breakeven deaktiveret for trade'en.
+    breakeven_trigger: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)
 
 
 class SignalLog(Base):
@@ -79,6 +82,9 @@ class SignalLog(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     gate_passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
     trade_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # {gate_name: {passed, score, reason}} — samme form som Trade.gate_scores.
+    # Uden den kan Loop A ikke sige HVILKEN gate der afviste et signal.
+    gate_scores: Mapped[Any] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class StrategyPerformance(Base):

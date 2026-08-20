@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import signal
 
 import yaml
 from dotenv import load_dotenv
@@ -78,6 +79,45 @@ def _setup_scheduler(config: dict):
     return scheduler
 
 
+def _request_shutdown(task: "asyncio.Future", sig: int) -> None:
+    """Aflys engine-tasken, så main()'s finally-blok kan køre engine.stop()."""
+    try:
+        name = signal.Signals(sig).name
+    except ValueError:  # pragma: no cover - ukendt signalnummer
+        name = str(sig)
+    logger.info("Modtog %s — lukker ned...", name)
+    if not task.done():
+        task.cancel()
+
+
+def _install_signal_handlers(task: "asyncio.Future") -> None:
+    """Luk pænt ned på SIGTERM/SIGINT.
+
+    SIGTERM er det signal cron/LaunchAgent (og `kill`) bruger til at stoppe botten.
+    Uden en handler dør processen på stedet: ccxt-sessionen lukkes aldrig, og de to
+    engine-loops afbrydes midt i en runde.
+
+    Startes processen fra en non-interaktiv shell kan SIGTERM være ARVET som
+    SIG_IGN — så ignoreres signalet uanset hvor pænt vi ellers rydder op. At
+    installere en handler her overskriver den arv, hvilket er hele pointen med
+    at gøre det eksplicit frem for at stole på default-dispositionen.
+    """
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _request_shutdown, task, sig)
+        except (NotImplementedError, RuntimeError, AttributeError):
+            # Windows-event-loops har ingen add_signal_handler — fald tilbage på
+            # signal.signal og hop tilbage i loop-tråden derfra.
+            def _fallback(signum, frame, _task=task, _loop=loop):
+                _loop.call_soon_threadsafe(_request_shutdown, _task, signum)
+
+            try:
+                signal.signal(sig, _fallback)
+            except (OSError, ValueError) as e:  # pragma: no cover - platformafhængigt
+                logger.warning("Kunne ikke installere handler for %s: %s", sig, e)
+
+
 async def main() -> None:
     load_dotenv()
     with open("config.yaml") as f:
@@ -86,10 +126,16 @@ async def main() -> None:
     scheduler = _setup_scheduler(config)
 
     engine = TradingEngine(config)
+    # Engine'en kører som sin EGEN task, så signal-handleren kan aflyse præcis den.
+    # Aflyses main() i stedet, bliver finally-blokken selv afbrudt midt i oprydningen.
+    engine_task = asyncio.ensure_future(engine.start())
+    _install_signal_handlers(engine_task)
     try:
-        await engine.start()
+        await engine_task
+    except asyncio.CancelledError:
+        logger.info("Engine-loopet aflyst — kører nedlukning.")
     finally:
-        # Ctrl-C aflyser main-tasken; uden stop() lukkes ccxt-sessionen aldrig.
+        # Ctrl-C/SIGTERM aflyser engine-tasken; uden stop() lukkes ccxt-sessionen aldrig.
         await engine.stop()
         if scheduler is not None:
             scheduler.shutdown(wait=False)

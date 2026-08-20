@@ -139,14 +139,31 @@ class TradingEngine:
         await self._apply_sl_tp(prices)
 
     async def _apply_sl_tp(self, prices: dict[str, float]) -> None:
-        """Luk positioner der har ramt SL/TP ved de givne priser og notificér."""
+        """Luk positioner der har ramt SL/TP eller time-stop og notificér.
+
+        Rækkefølge: breakeven (flytter SL til entry) → SL/TP → time-stop, så det
+        opdaterede stop gælder med det samme og prisniveauer vinder over tiden.
+        """
         if not prices:
             return
+        await self.position_tracker.check_breakeven(prices)
         closed = await self.position_tracker.check_sl_tp(prices)
         for trade in closed:
             await self.notifier.send_trade_closed(trade, self._exit_reason(trade))
         if closed:
             logger.info(f"{len(closed)} positioner lukket via SL/TP")
+
+        # Time-stop efter SL/TP: rammer en position begge dele samme runde,
+        # er det niveauet der gælder — præcis som i backtesten.
+        timed_out = await self.position_tracker.check_time_stop(
+            prices,
+            self.config.get("trading", {}).get("max_bars_held", 24),
+            self._get_sleep_seconds(),
+        )
+        for trade in timed_out:
+            await self.notifier.send_trade_closed(trade, "Time-stop")
+        if timed_out:
+            logger.info(f"{len(timed_out)} positioner lukket via time-stop")
 
     async def _initialize(self) -> None:
         await init_db()
@@ -170,6 +187,16 @@ class TradingEngine:
 
         # Skriv en initial status med det samme, så dashboardet viser live data ved opstart.
         await self._write_dashboard_status()
+
+    def _config_params(self, strategy_id: str) -> dict:
+        """Parameter-overrides fra ``strategies.params.<strategy_id>`` i config.
+
+        Det er her reflection-loopets auto-apply skriver sine ændringer
+        (reflection/applier.py). Uden dette opslag nåede de aldrig frem til
+        strategien, og botten kørte videre på klassens defaults.
+        """
+        params = (self.config.get("strategies", {}) or {}).get("params") or {}
+        return dict(params.get(strategy_id) or {})
 
     async def _tick(self) -> None:
         primary_tf = self.config["timeframes"]["primary"]
@@ -203,10 +230,14 @@ class TradingEngine:
                     pass
 
             for strategy in self.strategies:
-                # A/B: kør signal på arm-tildelte params hvis et eksperiment er aktivt,
-                # ellers tom dict → strategiens defaults (assignment=None, ab_arm=None).
+                # Params lagvis: config-overrides som base, aktiv A/B-arm ovenpå.
+                # Arm A (kontrol) har tom params-dict og er dermed ren config;
+                # arm B's ene parameter vinder over config. Uden eksperiment:
+                # kun config, og uden config-entry: strategiens egne defaults.
                 assignment = get_assignment(strategy.name)
-                params = assignment.params if assignment else {}
+                params = self._config_params(strategy.name)
+                if assignment:
+                    params.update(assignment.params)
                 try:
                     signal = strategy.generate_signal(df, symbol, params=params)
                 except Exception as e:
@@ -261,13 +292,13 @@ class TradingEngine:
                         await self.notifier.send_gate_rejected(signal, result)
                         break
 
-                await self._log_signal(signal, gate_passed, None)
+                await self._log_signal(signal, gate_passed, None, gate_scores)
 
                 if not gate_passed:
                     continue
 
                 # Beregn SL/TP og åbn position
-                sl_price, tp_price = self._resolve_sl_tp(signal, current_price)
+                sl_price, tp_price = self._resolve_sl_tp(signal, current_price, df=df)
 
                 order = await self.exchange.place_order(signal,
                     self.config["trading"]["stake_amount"] / current_price,
@@ -289,7 +320,8 @@ class TradingEngine:
 
         await self._maybe_daily_summary()
 
-    async def _log_signal(self, signal: Signal, gate_passed: bool, trade_id: str | None) -> None:
+    async def _log_signal(self, signal: Signal, gate_passed: bool, trade_id: str | None,
+                          gate_scores: dict | None = None) -> None:
         log = SignalLog(
             id=str(uuid.uuid4()),
             strategy_id=signal.strategy_id,
@@ -303,6 +335,7 @@ class TradingEngine:
             timestamp=utc_now(),
             gate_passed=gate_passed,
             trade_id=trade_id,
+            gate_scores=gate_scores or {},
         )
         async with async_session_maker() as session:
             session.add(log)
@@ -336,23 +369,39 @@ class TradingEngine:
             logger.warning("News confirmation-hook fejlede for %s: %s", symbol, e)
             return signal
 
-    def _resolve_sl_tp(self, signal: Signal, current_price: float) -> tuple[float, float]:
+    def _resolve_sl_tp(self, signal: Signal, current_price: float,
+                       df=None) -> tuple[float, float]:
+        """SL/TP for et signal — samme logik som backtest/runner._resolve_sl_tp.
+
+        Chart-baserede niveauer fra signalet vinder. Ellers volatilitetstilpasset:
+        SL-afstand = atr_sl_multiplier × ATR(14) på seneste bar, TP-afstand =
+        tp_rr_ratio × SL-afstand. Uden df/ATR bruges de faste sl_pct/tp_pct.
+        """
         if signal.sl_price is not None and signal.tp_price is not None:
             return signal.sl_price, signal.tp_price
 
         asset_class = BaseStrategy.get_asset_class(signal.symbol)
         defaults = self.config["risk_defaults"][asset_class]
-        sl_pct = defaults["sl_pct"] / 100
-        tp_pct = defaults["tp_pct"] / 100
+        atr = self._latest_atr(df)
+
+        if atr is not None:
+            sl_dist = defaults.get("atr_sl_multiplier", 2.0) * atr
+            tp_dist = defaults.get("tp_rr_ratio", 2.0) * sl_dist
+        else:
+            sl_dist = current_price * defaults["sl_pct"] / 100
+            tp_dist = current_price * defaults["tp_pct"] / 100
 
         if signal.side == "long":
-            sl = current_price * (1 - sl_pct)
-            tp = current_price * (1 + tp_pct)
-        else:
-            sl = current_price * (1 + sl_pct)
-            tp = current_price * (1 - tp_pct)
+            return current_price - sl_dist, current_price + tp_dist
+        return current_price + sl_dist, current_price - tp_dist
 
-        return sl, tp
+    @staticmethod
+    def _latest_atr(df) -> float | None:
+        """ATR(14) på seneste bar. None hvis df/kolonne mangler eller er NaN/<=0."""
+        if df is None or "atr_14" not in getattr(df, "columns", []):
+            return None
+        value = float(df["atr_14"].iloc[-1])
+        return value if value == value and value > 0 else None  # value == value: ikke NaN
 
     def _get_sleep_seconds(self) -> int:
         primary_tf = self.config["timeframes"]["primary"]
@@ -366,7 +415,10 @@ class TradingEngine:
         tp_hit = (trade.side == "long" and trade.exit_price >= trade.tp_price) or (
             trade.side == "short" and trade.exit_price <= trade.tp_price
         )
-        return "TP hit" if tp_hit else "SL hit"
+        if tp_hit:
+            return "TP hit"
+        # SL flyttet til entry (breakeven) → tradet lukkede i nul, ikke med tab.
+        return "Breakeven" if trade.sl_price == trade.entry_price else "SL hit"
 
     async def _maybe_daily_summary(self) -> None:
         now = datetime.now()

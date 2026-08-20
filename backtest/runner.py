@@ -98,16 +98,45 @@ def fetch_data(symbol: str, timeframe: str = "4h") -> pd.DataFrame:
 # Trade-simulering (uændret kontrakt: df med 'time'-kolonne)
 # ---------------------------------------------------------------------------
 
-def _resolve_sl_tp(signal, entry_price: float, config: dict) -> tuple[float, float]:
+def _resolve_sl_tp(signal, entry_price: float, config: dict,
+                   atr: float | None = None) -> tuple[float, float]:
+    """SL/TP for en trade. Chart-baserede niveauer fra signalet vinder altid.
+
+    Ellers volatilitetstilpasset: SL-afstand = atr_sl_multiplier × ATR(14) og
+    TP-afstand = tp_rr_ratio × SL-afstand (default 2.0 → uændret 2:1 R:R).
+    Uden brugbar ATR bruges de faste sl_pct/tp_pct fra config som fallback.
+    """
     if signal.sl_price is not None and signal.tp_price is not None:
         return signal.sl_price, signal.tp_price
+
     asset_class = BaseStrategy.get_asset_class(signal.symbol)
     defaults = config["risk_defaults"][asset_class]
-    sl_pct = defaults["sl_pct"] / 100
-    tp_pct = defaults["tp_pct"] / 100
+
+    if atr is not None and atr == atr and atr > 0:  # atr == atr filtrerer NaN
+        sl_dist = defaults.get("atr_sl_multiplier", 2.0) * atr
+        tp_dist = defaults.get("tp_rr_ratio", 2.0) * sl_dist
+    else:
+        sl_dist = entry_price * defaults["sl_pct"] / 100
+        tp_dist = entry_price * defaults["tp_pct"] / 100
+
     if signal.side == "long":
-        return entry_price * (1 - sl_pct), entry_price * (1 + tp_pct)
-    return entry_price * (1 + sl_pct), entry_price * (1 - tp_pct)
+        return entry_price - sl_dist, entry_price + tp_dist
+    return entry_price + sl_dist, entry_price - tp_dist
+
+
+def _breakeven_trigger(side: str, entry_price: float, tp: float, pct: float) -> float:
+    """Prisen hvor SL flyttes til entry: `pct` af vejen fra entry mod TP."""
+    if side == "long":
+        return entry_price + pct * (tp - entry_price)
+    return entry_price - pct * (entry_price - tp)
+
+
+def _entry_atr(future_df: pd.DataFrame) -> float | None:
+    """ATR(14) på udførelsesbaren. None hvis kolonnen mangler eller er NaN."""
+    if "atr_14" not in future_df.columns:
+        return None
+    value = float(future_df["atr_14"].iloc[0])
+    return None if value != value else value  # NaN → None
 
 
 def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
@@ -117,8 +146,14 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
     Lukker ved SL, TP eller sidste bar. SL tjekkes før TP samme bar (konservativt).
     """
     entry_price = float(future_df.iloc[0]["open"])
-    sl, tp = _resolve_sl_tp(signal, entry_price, config)
+    atr = _entry_atr(future_df)
+    sl, tp = _resolve_sl_tp(signal, entry_price, config, atr=atr)
     stake = config["trading"]["stake_amount"]
+
+    trigger_pct = config.get("trading", {}).get("breakeven_trigger_pct", 0.5)
+    breakeven_trigger = _breakeven_trigger(signal.side, entry_price, tp, trigger_pct)
+    breakeven_activated = False
+    max_bars = config.get("trading", {}).get("max_bars_held", 24)
 
     exit_price = float(future_df.iloc[-1]["close"])
     reason = "end_of_data"
@@ -128,17 +163,39 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
     for offset in range(1, len(future_df)):
         bar = future_df.iloc[offset]
         high, low = float(bar["high"]), float(bar["low"])
+
+        # Breakeven: når prisen har bevæget sig trigger_pct af vejen mod TP
+        # flyttes SL til entry. Tjekkes før exit-tjekket på samme bar, så en bar
+        # der både trigger og retracerer lukkes i 0 frem for på det gamle SL.
+        if not breakeven_activated:
+            if (signal.side == "long" and high >= breakeven_trigger) or (
+                signal.side == "short" and low <= breakeven_trigger
+            ):
+                sl = entry_price
+                breakeven_activated = True
+
         if signal.side == "long":
             if low <= sl:
-                exit_price, reason = sl, "stop_loss"
+                exit_price = sl
+                reason = "breakeven" if breakeven_activated else "stop_loss"
             elif high >= tp:
                 exit_price, reason = tp, "take_profit"
         else:
             if high >= sl:
-                exit_price, reason = sl, "stop_loss"
+                exit_price = sl
+                reason = "breakeven" if breakeven_activated else "stop_loss"
             elif low <= tp:
                 exit_price, reason = tp, "take_profit"
         if reason != "end_of_data":
+            bars_held = offset
+            exit_time = bar.get("time")
+            break
+
+        # Time-stop: tjekkes EFTER SL/TP, så et niveau der rammes på samme bar
+        # vinder. En momentum-strategi skal ikke holde en position i månedsvis.
+        if max_bars and offset >= max_bars:
+            exit_price = float(bar["close"])
+            reason = "time_stop"
             bars_held = offset
             exit_time = bar.get("time")
             break
@@ -161,6 +218,7 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
         "pnl_pct": round(pnl_pct, 4),
         "reason": reason,
         "bars_held": bars_held,
+        "breakeven_activated": breakeven_activated,
     }
 
 
@@ -212,7 +270,8 @@ def _to_db_record(strategy_id: str, symbol: str, m: dict, period: tuple, source_
         "symbol": symbol,
         "period_start": start,
         "period_end": end,
-        "total_trades": int(m.get("total_trades", 0)),
+        # Baseline'en skal matche de metrics den ledsager → afsluttede trades.
+        "total_trades": int(m.get("closed_trades", m.get("total_trades", 0))),
         "win_rate": round(m.get("win_rate", 0.0) / 100, 4),
         "profit_factor": None if pf == float("inf") else round(float(pf), 4),
         "sharpe": round(float(m.get("sharpe", 0.0)), 4),
@@ -284,8 +343,10 @@ THRESHOLDS = {
 
 
 def _passes(m: dict) -> bool:
+    # Sample-kravet gælder rigtige exits: 30 trades hvoraf 25 stadig var åbne da
+    # data slap op er ikke 30 udfald at bedømme en strategi på.
     return (
-        m["total_trades"] > THRESHOLDS["total_trades"]
+        m.get("closed_trades", m["total_trades"]) > THRESHOLDS["total_trades"]
         and m["win_rate"] > THRESHOLDS["win_rate"]
         and (m["profit_factor"] == float("inf") or m["profit_factor"] > THRESHOLDS["profit_factor"])
         and m["max_drawdown_pct"] > THRESHOLDS["max_drawdown_pct"]
@@ -330,21 +391,25 @@ def _run_all(config, timeframe: str) -> int:
             except Exception as e:  # data-fejl pr. symbol må ikke stoppe suiten
                 print(f" FEJL: {type(e).__name__}: {str(e)[:80]}")
                 rows.append({"strategy": strategy.name, "symbol": symbol,
-                             "trades": 0, "win_rate": 0.0, "profit_factor": 0.0,
+                             "trades": 0, "open_at_end": 0,
+                             "win_rate": 0.0, "profit_factor": 0.0,
                              "max_dd": 0.0, "sharpe": 0.0, "total_pnl_pct": 0.0,
                              "wins": 0, "losses": 0, "avg_win_pct": 0.0,
                              "avg_loss_pct": 0.0, "avg_bars_held": 0.0,
                              "pass": False})
                 continue
             pf = m["profit_factor"]
-            print(f" {m['total_trades']:>4d} trades | WR {m['win_rate']:>5.1f}% | "
-                  f"PF {'inf' if pf == float('inf') else f'{pf:.2f}'}")
+            print(f" {m['closed_trades']:>4d} trades | WR {m['win_rate']:>5.1f}% | "
+                  f"PF {'inf' if pf == float('inf') else f'{pf:.2f}'}"
+                  + (f" | {m['open_at_end_count']} åbne v. data-slut"
+                     if m["open_at_end_count"] else ""))
             avg_bars = (
                 sum(t["bars_held"] for t in trades) / len(trades) if trades else 0.0
             )
             rows.append({
                 "strategy": strategy.name, "symbol": symbol,
-                "trades": m["total_trades"], "win_rate": m["win_rate"],
+                "trades": m["closed_trades"], "win_rate": m["win_rate"],
+                "open_at_end": m["open_at_end_count"],
                 "profit_factor": pf, "max_dd": m["max_drawdown_pct"],
                 "sharpe": m["sharpe"], "total_pnl_pct": m["total_pnl_pct"],
                 "wins": m["wins"], "losses": m["losses"],
@@ -353,7 +418,7 @@ def _run_all(config, timeframe: str) -> int:
                 "pass": _passes(m),
             })
             # Kun symboler med faktiske data (og dermed en kendt periode) importeres til DB.
-            if m["total_trades"] > 0 and symbol in periods:
+            if m["closed_trades"] > 0 and symbol in periods:
                 db_records.append(
                     _to_db_record(strategy.name, symbol, m, periods[symbol], source_file)
                 )
@@ -402,9 +467,9 @@ def _print_suite_table(rows: list[dict]) -> None:
 def _save_suite_csv(rows: list[dict]) -> Path:
     report.RESULTS_DIR.mkdir(exist_ok=True)
     path = report.RESULTS_DIR / f"suite_{date.today().isoformat()}.csv"
-    fields = ["strategy", "symbol", "trades", "win_rate", "profit_factor",
-              "max_dd", "sharpe", "total_pnl_pct", "wins", "losses",
-              "avg_win_pct", "avg_loss_pct", "avg_bars_held", "pass"]
+    fields = ["strategy", "symbol", "trades", "open_at_end", "win_rate",
+              "profit_factor", "max_dd", "sharpe", "total_pnl_pct", "wins",
+              "losses", "avg_win_pct", "avg_loss_pct", "avg_bars_held", "pass"]
     with path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
@@ -428,7 +493,8 @@ def _save_trades_csv(all_trades: list[dict]) -> Path | None:
     report.RESULTS_DIR.mkdir(exist_ok=True)
     path = report.RESULTS_DIR / f"trades_{date.today().isoformat()}.csv"
     fields = ["strategy_id", "symbol", "side", "entry_time", "exit_time",
-              "entry_price", "exit_price", "pnl", "pnl_pct", "reason", "bars_held"]
+              "entry_price", "exit_price", "pnl", "pnl_pct", "reason", "bars_held",
+              "breakeven_activated"]
     with path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()

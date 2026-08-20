@@ -13,27 +13,48 @@ def _year_span(trades: list[dict]) -> float:
     return delta.total_seconds() / (365.25 * 24 * 3600)
 
 
+# Exits der ikke er et rigtigt trade-udfald: prisen er bare der hvor data slap op.
+# De forvrider win-rate, Sharpe og drawdown og holdes derfor ude af alle metrics.
+UNFINISHED_REASONS = ("end_of_data",)
+
+
+def _empty() -> dict:
+    return {
+        "total_trades": 0, "closed_trades": 0, "open_at_end_count": 0,
+        "wins": 0, "losses": 0, "win_rate": 0.0,
+        "avg_win_pct": 0.0, "avg_loss_pct": 0.0, "profit_factor": 0.0,
+        "total_pnl": 0.0, "total_pnl_pct": 0.0, "avg_pnl_pct": 0.0,
+        "max_drawdown_pct": 0.0, "sharpe": 0.0,
+    }
+
+
 def compute(trades: list[dict]) -> dict:
     """
     Beregner performance-metrics fra en liste af simulerede trades.
     Hver trade er en dict med mindst 'pnl' (USDT) og 'pnl_pct' (%).
-    """
-    n = len(trades)
-    if n == 0:
-        return {
-            "total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0.0,
-            "avg_win_pct": 0.0, "avg_loss_pct": 0.0, "profit_factor": 0.0,
-            "total_pnl": 0.0, "total_pnl_pct": 0.0, "avg_pnl_pct": 0.0,
-            "max_drawdown_pct": 0.0, "sharpe": 0.0,
-        }
 
-    pnls = [t.get("pnl", 0.0) for t in trades]
-    pcts = [t.get("pnl_pct", 0.0) for t in trades]
+    Trades med reason='end_of_data' var stadig åbne da data slap op — deres
+    "exit"-pris er tilfældig, så de tælles med i ``total_trades`` og
+    ``open_at_end_count``, men indgår IKKE i win-rate, Sharpe, drawdown eller
+    PnL-summerne. ``closed_trades`` er antallet metrics faktisk bygger på.
+    """
+    closed = [t for t in trades if t.get("reason") not in UNFINISHED_REASONS]
+    open_at_end = len(trades) - len(closed)
+
+    n = len(closed)
+    if n == 0:
+        result = _empty()
+        result["total_trades"] = len(trades)
+        result["open_at_end_count"] = open_at_end
+        return result
+
+    pnls = [t.get("pnl", 0.0) for t in closed]
+    pcts = [t.get("pnl_pct", 0.0) for t in closed]
 
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p <= 0]
-    win_pcts = [t["pnl_pct"] for t in trades if t.get("pnl", 0.0) > 0]
-    loss_pcts = [t["pnl_pct"] for t in trades if t.get("pnl", 0.0) <= 0]
+    win_pcts = [t["pnl_pct"] for t in closed if t.get("pnl", 0.0) > 0]
+    loss_pcts = [t["pnl_pct"] for t in closed if t.get("pnl", 0.0) <= 0]
 
     gross_profit = sum(wins)
     gross_loss = abs(sum(losses))
@@ -42,7 +63,9 @@ def compute(trades: list[dict]) -> dict:
     )
 
     return {
-        "total_trades": n,
+        "total_trades": len(trades),      # alle, inkl. dem der stadig var åbne
+        "closed_trades": n,               # kun rigtige exits — metrics bygger på disse
+        "open_at_end_count": open_at_end,
         "wins": len(wins),
         "losses": len(losses),
         "win_rate": round(len(wins) / n * 100, 2),
@@ -53,7 +76,7 @@ def compute(trades: list[dict]) -> dict:
         "total_pnl_pct": round(sum(pcts), 3),
         "avg_pnl_pct": round(sum(pcts) / n, 3),
         "max_drawdown_pct": round(max_drawdown(pcts), 3),
-        "sharpe": round(sharpe(pcts, trades), 3),
+        "sharpe": round(sharpe(pcts, closed), 3),
     }
 
 

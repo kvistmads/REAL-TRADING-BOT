@@ -335,6 +335,7 @@ def test_nightly_dry_run_forces_report_only(tmp_path, temp_db, base_config):
     _seed_trades(temp_db, 200)
     tmp_cfg = tmp_path / "config.yaml"
     shutil.copy("config.yaml", tmp_cfg)
+    before = tmp_cfg.read_text()
     obs = [{"strategy_id": "reversal_context", "type": "parameter_suggestion",
             "parameter": "min_rsi_delta", "current_value": 5, "suggested_value": 5.5,
             "evidence": {"n": 50}, "confidence": 0.99, "reasoning": "would-auto"}]
@@ -351,9 +352,9 @@ def test_nightly_dry_run_forces_report_only(tmp_path, temp_db, base_config):
     # Trods conf=0.99 → intet auto-applied i dry-run.
     assert summary["auto_applied"] == 0
     assert summary["report_only"] == 1
-    # config urørt (min_rsi_delta blev ikke skrevet).
-    written = yaml.safe_load(open(tmp_cfg))
-    assert "params" not in written.get("strategies", {})
+    # config urørt (min_rsi_delta blev ikke skrevet). Sammenlign hele filen —
+    # "ingen params-sektion" holdt kun så længe config.yaml ikke selv havde en.
+    assert tmp_cfg.read_text() == before
 
 
 def test_nightly_runs_on_varied_simulated_trades(tmp_path, temp_db, base_config):
@@ -421,12 +422,12 @@ def test_reject_command_leaves_config_untouched(tmp_path, temp_db):
     _seed_pending_observation(temp_db)
     tmp_cfg = tmp_path / "config.yaml"
     shutil.copy("config.yaml", tmp_cfg)
+    before = tmp_cfg.read_text()
 
     with temp_db() as s:
         reply = telegram_handler.handle_command("/reject_1", s, cfg_path=str(tmp_cfg))
     assert "Afvist" in reply
-    written = yaml.safe_load(open(tmp_cfg))
-    assert "params" not in written.get("strategies", {})
+    assert tmp_cfg.read_text() == before
     with temp_db() as s:
         obs = s.execute(select(Observation)).scalars().one()
         assert obs.approved_by_user is False
