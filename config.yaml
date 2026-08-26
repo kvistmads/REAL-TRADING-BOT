@@ -67,7 +67,8 @@ reflection:
 
   nightly:
     schedule: "0 2 * * *"             # 02:00 UTC
-    lookback_days: 30                 # Analyser trades fra de seneste N dage
+    lookback_hours: 24                # Analyser trades/signals fra de seneste N timer
+                                      # (weekly-rapporten dækker den lange historik)
     min_trades_per_strategy: 10       # Spring strategi over hvis for få trades
 
   weekly:

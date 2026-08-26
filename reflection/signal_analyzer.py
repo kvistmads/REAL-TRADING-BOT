@@ -45,9 +45,9 @@ def _first_failing_gate(gate_scores: Any) -> str | None:
     return None
 
 
-def analyze_signals(session, lookback_days: int) -> dict:
-    """Analysér SignalLog for perioden. Kører uanset antal lukkede trades."""
-    cutoff = utc_now() - timedelta(days=lookback_days)
+def analyze_signals(session, lookback_hours: int) -> dict:
+    """Analysér SignalLog for de seneste N TIMER. Kører uanset antal lukkede trades."""
+    cutoff = utc_now() - timedelta(hours=lookback_hours)
     signals = (
         session.execute(select(SignalLog).where(SignalLog.timestamp >= cutoff))
         .scalars()
@@ -86,9 +86,9 @@ def analyze_signals(session, lookback_days: int) -> dict:
     }
 
 
-def format_signal_section(stats: dict, lookback_days: int) -> str:
+def format_signal_section(stats: dict, lookback_hours: int) -> str:
     """Markdown-afsnit til nightly-rapporten. Tom analyse → stadig et afsnit."""
-    lines = [f"## Signal-analyse (seneste {lookback_days} dage)"]
+    lines = [f"## Signal-analyse (seneste {lookback_hours} timer)"]
     if not stats or not stats.get("total"):
         lines.append("- Ingen signaler genereret i perioden.")
         return "\n".join(lines)
