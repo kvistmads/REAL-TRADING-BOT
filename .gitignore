@@ -21,3 +21,11 @@ bot_status.json
 # Runtime-logs (skrives af LaunchAgent/cron — aldrig commit)
 bot.log
 bot_error.log
+
+# Historiske markedsdata - store filer, hentes/genskabes, aldrig i git
+data/historical_xau/*.csv
+data/historical_xau/*.csv.gz
+data/historical/
+research/output/*.csv
+
+.claude/
