@@ -141,11 +141,11 @@ def _prompt_layer2(strategy_id: str, agg_csv: str) -> str:
     )
 
 
-def _prompt_layer3(weekly_csv: str, corr_csv: str, shadow_csv: str = "", lookback_days: int = 30) -> str:
+def _prompt_layer3(weekly_csv: str, corr_csv: str, shadow_csv: str = "", lookback_hours: int = 24) -> str:
     shadow_block = ""
     if shadow_csv:
         shadow_block = (
-            f"\n\n## News Intelligence performance (seneste {lookback_days} dage):\n"
+            f"\n\n## News Intelligence performance (seneste {lookback_hours} timer):\n"
             f"{shadow_csv}\n\n"
             "Find: Er der perioder hvor news-intelligence havde høj accuracy men vores tekniske "
             "strategier underpræsterede? Det indikerer at news-signalet kunne have haft merværdi."
@@ -226,18 +226,18 @@ def run_nightly(
     report_only: list[dict] = []
     all_obs_for_report: list[dict] = []
 
-    lookback_days = rcfg["nightly"]["lookback_days"]
+    lookback_hours = rcfg["nightly"]["lookback_hours"]
     signal_stats: dict = {"total": 0}
 
     with session_factory() as session:
         total_trades = extractor.count_closed_trades(session)
-        df = extractor.extract_closed_trades(session, lookback_days)
+        df = extractor.extract_closed_trades(session, lookback_hours)
         logger.info("Nightly: %d lukkede trades i lookback, %d totalt.", len(df), total_trades)
 
         # Signal-analysen kører UANSET om der er lukkede trades: med 0 trades er
         # SignalLog det eneste sted der står hvad botten ville have handlet.
         try:
-            signal_stats = analyze_signals(session, lookback_days)
+            signal_stats = analyze_signals(session, lookback_hours)
             logger.info("Nightly: %d signals i lookback (%d passerede).",
                         signal_stats.get("total", 0), signal_stats.get("passed", 0))
         except Exception as e:  # signal-analysen må aldrig vælte nightly
@@ -267,7 +267,7 @@ def run_nightly(
             # Lag 3 — portefølje (beriget med news-intelligence-performance)
             weekly = extractor.weekly_pnl_by_strategy(df)
             corr = extractor.strategy_correlation(weekly)
-            lookback = rcfg["nightly"]["lookback_days"]
+            lookback = rcfg["nightly"]["lookback_hours"]
             shadow_df = extractor.extract_shadow_signal_performance(session, lookback)
             shadow_csv = shadow_df.to_csv(index=False) if not shadow_df.empty else ""
             if not weekly.empty:
@@ -321,7 +321,7 @@ def run_nightly(
         session.commit()
 
     report_path = write_nightly_report(
-        date_str, all_obs_for_report, signal_stats=signal_stats, lookback_days=lookback_days
+        date_str, all_obs_for_report, signal_stats=signal_stats, lookback_hours=lookback_hours
     )
     message = format_nightly_telegram(
         date_str, len(df) if not df.empty else 0,

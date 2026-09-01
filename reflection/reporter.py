@@ -131,13 +131,13 @@ def format_nightly_telegram(
 def write_nightly_report(date_str: str, observations: list[dict],
                          reports_dir: str = REPORTS_DIR,
                          signal_stats: dict | None = None,
-                         lookback_days: int = 30) -> str:
+                         lookback_hours: int = 24) -> str:
     """Skriv fuld nightly-markdownrapport. Returnér stien."""
     Path(reports_dir).mkdir(parents=True, exist_ok=True)
     path = f"{reports_dir}/nightly_{date_str}.md"
     lines = [f"# Nightly analyse-rapport {date_str}", ""]
     if signal_stats is not None:
-        lines.append(format_signal_section(signal_stats, lookback_days))
+        lines.append(format_signal_section(signal_stats, lookback_hours))
         lines.append("")
     if not observations:
         lines.append("Ingen observationer genereret.")

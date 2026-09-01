@@ -1,0 +1,102 @@
+{
+  "BTC/USDT": {
+    "bars": 3297,
+    "degenerate_refs": 0,
+    "file": "data/historical/BTCUSDT_1d.csv",
+    "first": "2017-08-17",
+    "kind": "crypto",
+    "last": "2026-08-26",
+    "signals_excluded": 0,
+    "truncated_at": null
+  },
+  "ETH/USDT": {
+    "bars": 3297,
+    "degenerate_refs": 0,
+    "file": "data/historical/ETHUSDT_1d.csv",
+    "first": "2017-08-17",
+    "kind": "crypto",
+    "last": "2026-08-26",
+    "signals_excluded": 0,
+    "truncated_at": null
+  },
+  "EUR (6E=F)": {
+    "bars": 6551,
+    "degenerate_refs": 36,
+    "file": "data/historical/6E_1d.csv",
+    "first": "2000-09-12",
+    "kind": "futures",
+    "last": "2026-08-26",
+    "signals_excluded": 7,
+    "truncated_at": null
+  },
+  "GBP (6B=F)": {
+    "bars": 6465,
+    "degenerate_refs": 38,
+    "file": "data/historical/6B_1d.csv",
+    "first": "2000-10-05",
+    "kind": "futures",
+    "last": "2026-08-26",
+    "signals_excluded": 6,
+    "truncated_at": null
+  },
+  "Guld (GC=F)": {
+    "bars": 6520,
+    "degenerate_refs": 1042,
+    "file": "data/historical/GC_1d.csv",
+    "first": "2000-08-30",
+    "kind": "futures",
+    "last": "2026-08-26",
+    "signals_excluded": 185,
+    "truncated_at": null
+  },
+  "Guld (XAU spot)": {
+    "bars": 5337,
+    "degenerate_refs": 0,
+    "file": "data/historical_xau/XAU_1d_data.csv",
+    "first": "2004-06-11",
+    "kind": "spot",
+    "last": "2025-03-21",
+    "signals_excluded": 0,
+    "truncated_at": "2025-03-31"
+  },
+  "Nasdaq 100 (NQ=F)": {
+    "bars": 6549,
+    "degenerate_refs": 1,
+    "file": "data/historical/NQ_1d.csv",
+    "first": "2000-09-18",
+    "kind": "futures",
+    "last": "2026-08-26",
+    "signals_excluded": 0,
+    "truncated_at": null
+  },
+  "S&P 500 (ES=F)": {
+    "bars": 6549,
+    "degenerate_refs": 0,
+    "file": "data/historical/ES_1d.csv",
+    "first": "2000-09-18",
+    "kind": "futures",
+    "last": "2026-08-26",
+    "signals_excluded": 0,
+    "truncated_at": null
+  },
+  "SOL/USDT": {
+    "bars": 2207,
+    "degenerate_refs": 0,
+    "file": "data/historical/SOLUSDT_1d.csv",
+    "first": "2020-08-11",
+    "kind": "crypto",
+    "last": "2026-08-26",
+    "signals_excluded": 0,
+    "truncated_at": null
+  },
+  "XAU fuld (regression)": {
+    "bars": 5383,
+    "degenerate_refs": 0,
+    "file": "data/historical_xau/XAU_1d_data.csv",
+    "first": "2004-06-11",
+    "kind": "spot",
+    "last": "2025-09-30",
+    "signals_excluded": 0,
+    "truncated_at": null
+  }
+}

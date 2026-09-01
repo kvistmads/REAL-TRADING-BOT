@@ -45,6 +45,10 @@ POSITION_CHECK_INTERVAL = 3600
 # bot_status.json er kun DB-læsning + atomisk diskskriv → hvert minut, så
 # dashboardet ikke står stille mellem tickene.
 STATUS_WRITE_INTERVAL = 60
+# Hvor længe før bar-close signal-ticket vækkes. Strategierne læser df.iloc[-1],
+# så vi vil ramme den bar der er ved at LUKKE (≈fuld volumen) — ikke den nyåbnede
+# bar efter lukketid, som er tom. Se _get_sleep_seconds().
+TICK_CLOSE_BUFFER = 120
 
 
 class TradingEngine:
@@ -158,7 +162,10 @@ class TradingEngine:
         timed_out = await self.position_tracker.check_time_stop(
             prices,
             self.config.get("trading", {}).get("max_bars_held", 24),
-            self._get_sleep_seconds(),
+            # Barens LÆNGDE — ikke ventetiden til næste tick. check_time_stop
+            # dividerer holdetiden med denne, så et variabelt sleep ville få
+            # bars_held til at eksplodere og lukke positioner med det samme.
+            self._get_bar_seconds(),
         )
         for trade in timed_out:
             await self.notifier.send_trade_closed(trade, "Time-stop")
@@ -189,14 +196,24 @@ class TradingEngine:
         await self._write_dashboard_status()
 
     def _config_params(self, strategy_id: str) -> dict:
-        """Parameter-overrides fra ``strategies.params.<strategy_id>`` i config.
+        """Parameter-overrides til en strategi — lagvis, laveste prioritet først.
 
-        Det er her reflection-loopets auto-apply skriver sine ændringer
-        (reflection/applier.py). Uden dette opslag nåede de aldrig frem til
-        strategien, og botten kørte videre på klassens defaults.
+        Base er det globale ``strategies.min_confidence``. Uden det faldt
+        strategierne tilbage på klasseattributten (0.65) og returnerede None
+        internt, LÆNGE før engine'ens egen min_confidence-check blev nået — at
+        sænke config-værdien til 0.45 var derfor et stille no-op.
+
+        Ovenpå lægges ``strategies.params.<strategy_id>``, hvor reflection-loopets
+        auto-apply skriver (reflection/applier.py). En strategi-specifik
+        min_confidence vinder dermed stadig over den globale.
         """
-        params = (self.config.get("strategies", {}) or {}).get("params") or {}
-        return dict(params.get(strategy_id) or {})
+        strategies = self.config.get("strategies", {}) or {}
+        params: dict = {}
+        global_min = strategies.get("min_confidence")
+        if global_min is not None:
+            params["min_confidence"] = global_min
+        params.update((strategies.get("params") or {}).get(strategy_id) or {})
+        return params
 
     async def _tick(self) -> None:
         primary_tf = self.config["timeframes"]["primary"]
@@ -403,9 +420,41 @@ class TradingEngine:
         value = float(df["atr_14"].iloc[-1])
         return value if value == value and value > 0 else None  # value == value: ikke NaN
 
-    def _get_sleep_seconds(self) -> int:
+    def _get_bar_seconds(self) -> int:
+        """Barens længde i sekunder for ``timeframes.primary``.
+
+        Bruges som ``bar_seconds`` af time-stoppet, der omregner vægur-tid til
+        antal barer. Må IKKE forveksles med :meth:`_get_sleep_seconds`, som er en
+        variabel ventetid frem til næste bar-close.
+        """
         primary_tf = self.config["timeframes"]["primary"]
         return _TIMEFRAME_SECONDS.get(primary_tf, 14400)
+
+    def _get_sleep_seconds(self, now: datetime | None = None) -> int:
+        """Sekunder frem til næste bar-close på UTC-gitteret, minus bufferen.
+
+        Et fast sleep på én barlængde fase-låser ticket et vilkårligt sted inde i
+        baren: startes botten 00:31, evalueres HVER 4h-bar 31 minutter inde i sit
+        forløb, hvor kun ~13% af volumenet er handlet. volatility_breakout's
+        volume-gate (>1.2 × 20-bars-snittet) er dermed aritmetisk uopnåelig.
+
+        Her sigtes i stedet mod bar-close på UTC-gitteret (4h → 00:00, 04:00,
+        08:00, 12:00, 16:00, 20:00). Vi vågner ``TICK_CLOSE_BUFFER`` sekunder FØR
+        lukketid, fordi strategierne læser ``df.iloc[-1]``: dér er baren ~99%
+        færdig, hvor vi efter lukketid ville få en nyåbnet og reelt tom bar.
+        """
+        bar = self._get_bar_seconds()
+        # Bufferen må aldrig sluge hele baren (korte timeframes i test/config).
+        buffer = min(TICK_CLOSE_BUFFER, bar // 2)
+        now = now or utc_now()
+        # utc_now() er NAIV UTC — .timestamp() ville tolke den som lokaltid, så
+        # gitteret regnes ud af felterne direkte. 86400 % bar == 0 for alle
+        # understøttede timeframes, så døgnstart er selv et gitterpunkt.
+        since_midnight = now.hour * 3600 + now.minute * 60 + now.second
+        sleep = (bar - since_midnight % bar) - buffer
+        if sleep <= 0:  # vi står allerede inde i bufferen → sigt mod næste bar
+            sleep += bar
+        return int(sleep)
 
     @staticmethod
     def _exit_reason(trade) -> str:

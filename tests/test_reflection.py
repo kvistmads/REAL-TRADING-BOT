@@ -155,7 +155,7 @@ def _make_trade(**kw) -> Trade:
 def test_extractor_adds_temporal_features(mem_session):
     mem_session.add(_make_trade())
     mem_session.commit()
-    df = extractor.extract_closed_trades(mem_session, lookback_days=3650)
+    df = extractor.extract_closed_trades(mem_session, lookback_hours=3650 * 24)
     row = df.iloc[0]
     assert row["hour"] == 9
     assert row["weekday"] == 0  # 2026-07-20 er en mandag
@@ -165,7 +165,7 @@ def test_extractor_adds_temporal_features(mem_session):
 def test_extractor_unpacks_gate_scores(mem_session):
     mem_session.add(_make_trade())
     mem_session.commit()
-    df = extractor.extract_closed_trades(mem_session, lookback_days=3650)
+    df = extractor.extract_closed_trades(mem_session, lookback_hours=3650 * 24)
     row = df.iloc[0]
     assert row["adx_at_entry"] == 27.0
     assert row["regime_score"] == 1.0
@@ -363,6 +363,12 @@ def test_nightly_runs_on_varied_simulated_trades(tmp_path, temp_db, base_config)
                  hour=9, regime="trending", weeks_spread=3)
     _seed_trades(temp_db, 20, strategy="reversal_context", symbol="ETH/USDT",
                  hour=15, regime="sideways", weeks_spread=3)
+    # Testen handler om uge-aggregeringen/korrelationen, ikke om vinduespolitikken:
+    # produktionens 24-timers lookback ville per definition kun se den nyeste uge.
+    base_config = {**base_config,
+                   "reflection": {**base_config["reflection"],
+                                  "nightly": {**base_config["reflection"]["nightly"],
+                                              "lookback_hours": 8 * 7 * 24}}}
 
     summary = nightly.run_nightly(
         base_config,

@@ -21,7 +21,10 @@ for hvorfor den ikke kan køre på numpy 2.x/pandas 3.x). To API'er:
 
 Registry (`strategies/registry.py`) auto-discoverer alle `BaseStrategy`-subklasser i
 `strategies/`; kun de 3 ovenstående filer findes, så kun de 3 registreres.
-Aktivering + `min_confidence: 0.65` styres i `config.yaml`.
+Aktivering + `min_confidence` styres i `config.yaml` (`strategies.min_confidence`, nu 0.45).
+Engine sender den ned som base-param via `_config_params()`, så den vinder over
+klasseattributten `min_confidence = 0.65`; `strategies.params.<id>.min_confidence`
+vinder til gengæld over den globale.
 
 ## Datakilder (live + backtest)
 Både `data/fetcher.py` (live) og `backtest/runner.py` bruger Binance (ccxt) til crypto og
@@ -53,6 +56,9 @@ ingen fejl) — så `--dry-run` virker uden nøgle.
 
 - **Loop A (`nightly.py`)**: analyserer lukkede trades i tre lag, kører hver observation
   gennem `confidence_gate` (guardrails) → `auto_apply` / `telegram_approval` / `report_only`.
+  Vinduet er `reflection.nightly.lookback_hours` (24) — ikke dage. Extractor/signal-analyse
+  tager nu TIMER (`lookback_hours`). Med 30 dage rapporterede den de samme gamle rækker nat
+  efter nat; den lange historik hører til i weekly.
 - **Loop B (`weekly.py`)**: arkitektur/performance-analyse af kodebasen — auto-applier ALDRIG.
 - Reflection er **synkron** (egen `sync_engine`/`sync_session_maker` i `core/database.py`)
   mod samme SQLite-fil; de to nye tabeller (`observations`, `ab_experiments`) oprettes via
@@ -93,8 +99,14 @@ ingen fejl) — så `--dry-run` virker uden nøgle.
 
 ## Phase 6 — To engine-loops (Del A+B, `PRD_PHASE6_FIXES.md`)
 Engine'en kører nu to parallelle loops via `asyncio.gather` i `start()`:
-- `_tick_loop()` — signal-generering hvert `timeframes.primary` (4h): OHLCV, indikatorer,
-  strategier, gates, trade-åbning. Skriver IKKE dashboard-status.
+- `_tick_loop()` — signal-generering, justeret efter bar-close: `_get_sleep_seconds()`
+  sover frem til næste `timeframes.primary`-close på UTC-gitteret (4h → 00:00, 04:00, …)
+  minus `TICK_CLOSE_BUFFER` (2 min). Strategierne læser `df.iloc[-1]`, så vi vil ramme den
+  bar der er ved at LUKKE — et fast sleep på 14400 s fase-låste ticket dér hvor botten blev
+  startet og evaluerede hver bar ~31 min inde i forløbet (~13 % volumen), hvilket gjorde
+  volatility_breakout's volume-gate uopnåelig. Barens LÆNGDE hedder nu `_get_bar_seconds()`
+  og er det, time-stoppet bruger. Loopet: OHLCV, indikatorer, strategier, gates,
+  trade-åbning. Skriver IKKE dashboard-status.
 - `_position_monitor_loop()` — sover 60 sek. pr. runde: skriver `bot_status.json` hver runde
   (`STATUS_WRITE_INTERVAL`) og kalder `_check_positions_fast()` hver time
   (`POSITION_CHECK_INTERVAL`), som henter pris for de unikke symboler med åbne positioner og
