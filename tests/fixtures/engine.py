@@ -33,12 +33,22 @@ CONFIG = {
 
 
 class _Tracker:
+    def __init__(self):
+        # Hvad engine'en sendte til flip-tjekket. Engine'en sluger fejl her (best-effort
+        # instrumentering), så uden en rigtig metode ville en signatur-ændring aldrig
+        # blive fanget af testene — den ville bare stille holde op med at virke.
+        self.flip_calls: list[dict] = []
+
     def get_open_positions(self): return []
     def get_open_count(self): return 0
     def get_daily_pnl(self): return 0.0
     async def check_breakeven(self, prices): return []
     async def check_sl_tp(self, prices): return []
     async def check_time_stop(self, prices, max_bars, bar_seconds): return []
+
+    async def check_flip_levels(self, closed_bars):
+        self.flip_calls.append(closed_bars)
+        return []
 
 
 class _Fetcher:

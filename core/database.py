@@ -12,6 +12,8 @@ from sqlalchemy import (
     Integer,
     String,
     create_engine,
+    event,
+    inspect,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
@@ -37,6 +39,18 @@ class Base(DeclarativeBase):
 
 
 class Trade(Base):
+    """En faktisk (papir-)handel: åbnet af engine, lukket af SL/TP/breakeven/time-stop.
+
+    ``confidence`` her er HANDELSSIGNALETS styrke — den værdi strategiens formel gav
+    da positionen blev åbnet, denormaliseret ved entry præcis som ``strategy_id``.
+    Det er IKKE reflection-loopets tillid til et parameterforslag (``Observation.confidence``)
+    og IKKE et news-shadow-signals tillid (``ShadowSignal.confidence``).
+
+    ``confidence`` og ``flip_level`` er IMMUTABLE: de beskriver præmissen for handlen på
+    det tidspunkt den blev taget, og en præmis der kan omskrives bagefter er ingen præmis.
+    ``_block_immutable_trade_fields`` nedenfor håndhæver det på DB-laget.
+    """
+
     __tablename__ = "trades"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -65,9 +79,64 @@ class Trade(Base):
     # Prisen hvor SL flyttes til entry (breakeven). Beregnes ved trade-åbning ud fra
     # trading.breakeven_trigger_pct; None = breakeven deaktiveret for trade'en.
     breakeven_trigger: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)
+    # --- Instrumentering (PRD_FLIP_LEVEL_OG_CONFIDENCE del C) -------------------
+    # Alle fire er nullable: eksisterende rækker fra før migrationen forbliver gyldige.
+    # confidence: signalets confidence ved entry. Uden den kan Loop A ikke se HVILKEN
+    # confidence der frembragte handlen — SignalLog kender den, men Trade er det eneste
+    # sted udfaldet står, og de to er ikke joinet.
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)
+    # flip_level: prisen hvor strategiens BEGRUNDELSE bortfalder (ikke et stop loss —
+    # stoppet begrænser tabet, flip level siger at tesen var forkert). Skrevet ved entry.
+    flip_level: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)
+    # Første BODY CLOSE igennem flip level (wicks tæller ikke — et wick er et sweep).
+    # OBSERVE-ONLY: sættes af monitoreringen, lukker ingen handel.
+    flip_breached_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True,
+                                                                default=None)
+    # Blev flip level brudt før handlen lukkede? None = ukendt (intet flip level, eller
+    # handlen er stadig åben og endnu ikke brudt).
+    flip_breached_before_exit: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True,
+                                                                     default=None)
+
+
+# Immutabilitet håndhæves i ORM-laget frem for i hver kaldende funktion: reflection,
+# applier og enhver fremtidig kode deler den samme session-maskine, så guarden her
+# rammer dem alle. Bemærk forskellen til ``reflection.protected_parameters``: dét
+# beskytter en global config-indstilling mod auto-apply, det her beskytter én
+# enkelt handels præmis mod at blive omskrevet efter udfaldet er kendt.
+_IMMUTABLE_TRADE_FIELDS = ("confidence", "flip_level")
+
+
+@event.listens_for(Trade, "before_update")
+def _block_immutable_trade_fields(mapper, connection, target: "Trade") -> None:  # noqa: ARG001
+    state = inspect(target)
+    for field in _IMMUTABLE_TRADE_FIELDS:
+        history = state.attrs[field].history
+        if not history.has_changes():
+            continue
+        old = history.deleted[0] if history.deleted else None
+        new = history.added[0] if history.added else None
+        # SQLAlchemy registrerer også en "ændring" når det samme tal tildeles igen.
+        # Det ændrer intet og skal ikke vælte en commit — kun en RIGTIG omskrivning
+        # af præmissen er en fejl.
+        if old == new:
+            continue
+        raise ValueError(
+            f"Trade.{field} er immutable (skrives ved entry, opdateres aldrig) — "
+            f"forsøgt ændret fra {old!r} til {new!r} på trade {target.id}"
+        )
 
 
 class SignalLog(Base):
+    """Hvert genereret signal — også dem gates afviste.
+
+    ``confidence`` her er HANDELSSIGNALETS styrke, direkte fra strategiens formel
+    (fx trend_momentum: 0.35 + 0.25·trend_strength + 0.25·cross_strength + 0.15·rsi_room).
+    Den sammenlignes med ``strategies.min_confidence`` i live-gaten. Det er IKKE
+    reflection-loopets tillid til et forslag (``Observation.confidence``) og IKKE et
+    news-signals tillid (``ShadowSignal.confidence``). Samme betydning som
+    ``Trade.confidence``, som er den denormaliserede kopi for de signaler der blev handler.
+    """
+
     __tablename__ = "signals"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -104,7 +173,15 @@ class StrategyPerformance(Base):
 
 
 class Observation(Base):
-    """En struktureret indsigt genereret af Loop A (nightly) eller Loop B (weekly)."""
+    """En struktureret indsigt genereret af Loop A (nightly) eller Loop B (weekly).
+
+    ``confidence`` her er MODELLENS TILLID TIL SIT EGET PARAMETERFORSLAG — hvor sikker
+    analysten er på at ``suggested_value`` er bedre end ``current_value``. Den afgør om
+    forslaget auto-applies, sendes til Telegram eller kun rapporteres (``proposal_gate``
+    i config, ``reflection/confidence_gate.py``). Det er IKKE et handelssignals styrke
+    (``SignalLog.confidence`` / ``Trade.confidence``) og IKKE et news-signals tillid
+    (``ShadowSignal.confidence``) — den har intet med markedet at gøre, kun med analysen.
+    """
 
     __tablename__ = "observations"
 
@@ -154,6 +231,11 @@ class ShadowSignal(Base):
     Loop C (News Intelligence) genererer disse fra headlines og evaluerer dem senere
     mod den faktiske prisbevægelse. De rører ALDRIG kapital — de er ren måling af, om
     news-signaler ville have haft merværdi (Phase 5 kan så aktivere et confirmation-hook).
+
+    ``confidence`` her er NEWS-PROGNOSENS tillid: hvor stærkt sentiment-billedet peger i
+    ``predicted_direction``. Den sammenlignes med ``news_intelligence.min_confidence``.
+    Det er IKKE et handelssignals styrke (``SignalLog.confidence`` / ``Trade.confidence``)
+    og IKKE reflection-loopets tillid til et parameterforslag (``Observation.confidence``).
     """
 
     __tablename__ = "shadow_signals"

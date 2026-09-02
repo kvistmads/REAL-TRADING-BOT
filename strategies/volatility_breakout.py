@@ -26,6 +26,8 @@ class VolatilityBreakout(BaseStrategy):
 
     name = "volatility_breakout"
     timeframe = "4h"
+    # Overskrives af config'ens strategies.min_confidence (0.45) i både live og
+    # backtest — se BaseStrategy.min_confidence for rækkefølgen. Fallback only.
     min_confidence = 0.65
 
     MIN_BARS = 120
@@ -160,6 +162,15 @@ class VolatilityBreakout(BaseStrategy):
                 "volume_ratio": float(volume_ratio),
                 "macd_hist": macd_hist,
                 "atr": atr_now,
+                # Flip level = det niveau der BLEV brudt (resistance for long,
+                # support for short). Tesen er "breakout ud af rangen"; en body close
+                # tilbage under/over netop det niveau er den mest direkte modsigelse
+                # af den. Valgt frem for den modsatte side af rangen, som først var
+                # foreslået: den modsatte side kan være None (find_sr_levels finder
+                # ikke altid et pivot på begge sider), og et brud dér er allerede en
+                # fuld rundtur — for sent til at kalde tesen forkert.
+                # breakout_level sættes altid når side sættes, så niveauet findes altid.
+                "flip_level": float(breakout_level),
                 "squeeze_intensity": float(squeeze_intensity),
                 "volume_strength": float(volume_strength),
                 "macd_strength": float(macd_strength),

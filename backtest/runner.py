@@ -8,6 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 import ccxt
+import numpy as np
 import pandas as pd
 import yaml
 import yfinance as yf
@@ -139,11 +140,42 @@ def _entry_atr(future_df: pd.DataFrame) -> float | None:
     return None if value != value else value  # NaN → None
 
 
-def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
+def _flip_breach_offset(signal, future_df: pd.DataFrame, horizon: int) -> int | None:
+    """Første bar-offset (>=1) hvor en BODY CLOSE bryder signalets flip level.
+
+    Body close, ikke high/low: et wick igennem er et sweep, ikke en invalidering
+    (samme skelnen som i ``find_sr_levels`` og ``position_tracker.is_flip_breached``).
+
+    Scannet går til `horizon` barer uanset hvornår handlen faktisk lukkede, så vi kan
+    skelne "brudt før exit" fra "brudt bagefter" — dvs. om tesen var forkert eller
+    blot timingen. Horisonten er handlens maksimale levetid (time-stoppet), så et
+    "bagefter" altid er inden for det vindue handlen kunne have levet i.
+
+    None = intet flip level, eller aldrig brudt inden for horisonten.
+    """
+    flip_level = (signal.metadata or {}).get("flip_level")
+    if flip_level is None or horizon < 1:
+        return None
+    closes = future_df["close"].to_numpy(dtype=float)[1:horizon + 1]
+    if closes.size == 0:
+        return None
+    breached = closes < flip_level if signal.side == "long" else closes > flip_level
+    if not breached.any():
+        return None
+    return int(np.argmax(breached)) + 1
+
+
+def simulate_trade(signal, future_df: pd.DataFrame, config: dict,
+                   flip_exit: bool = False) -> dict:
     """
     Simulér én trade fremad i tiden fra signalet.
     future_df: barer FRA og med udførelsesbaren (fill sker på første bars open).
     Lukker ved SL, TP eller sidste bar. SL tjekkes før TP samme bar (konservativt).
+
+    flip_exit=False (default, kørsel A1) = live-adfærden: flip level registreres kun
+    som observation. flip_exit=True (kørsel A2) lukker desuden handlen på første body
+    close gennem niveauet — en MÅLING af hvad et flip-exit ville have kostet/givet,
+    ikke en anbefaling.
     """
     entry_price = float(future_df.iloc[0]["open"])
     atr = _entry_atr(future_df)
@@ -154,6 +186,10 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
     breakeven_trigger = _breakeven_trigger(signal.side, entry_price, tp, trigger_pct)
     breakeven_activated = False
     max_bars = config.get("trading", {}).get("max_bars_held", 24)
+
+    flip_level = (signal.metadata or {}).get("flip_level")
+    flip_horizon = max_bars if max_bars else len(future_df) - 1
+    flip_offset = _flip_breach_offset(signal, future_df, flip_horizon)
 
     exit_price = float(future_df.iloc[-1]["close"])
     reason = "end_of_data"
@@ -191,6 +227,16 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
             exit_time = bar.get("time")
             break
 
+        # Flip-exit (kun A2): efter SL/TP fordi de rammes INDE i baren, mens flip
+        # level først er brudt når baren lukker. Før time-stoppet, fordi "tesen er
+        # modbevist" er en mere specifik grund end "tiden løb ud".
+        if flip_exit and flip_offset is not None and offset >= flip_offset:
+            exit_price = float(bar["close"])
+            reason = "flip_level"
+            bars_held = offset
+            exit_time = bar.get("time")
+            break
+
         # Time-stop: tjekkes EFTER SL/TP, så et niveau der rammes på samme bar
         # vinder. En momentum-strategi skal ikke holde en position i månedsvis.
         if max_bars and offset >= max_bars:
@@ -206,6 +252,15 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
         pnl_pct = (entry_price - exit_price) / entry_price * 100
     pnl = pnl_pct / 100 * stake
 
+    if flip_level is None:
+        flip_timing = "no_flip_level"
+    elif flip_offset is None:
+        flip_timing = "never"
+    elif flip_offset <= bars_held:
+        flip_timing = "before_exit"
+    else:
+        flip_timing = "after_exit"
+
     return {
         "symbol": signal.symbol,
         "side": signal.side,
@@ -219,24 +274,53 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict) -> dict:
         "reason": reason,
         "bars_held": bars_held,
         "breakeven_activated": breakeven_activated,
+        # Confidence gemmes pr. signal, ikke kun aggregeret: uden den kan spørgsmålet
+        # "diskriminerer scoren?" ikke stilles bagefter (PRD del B).
+        "confidence": round(float(signal.confidence), 6),
+        "flip_level": None if flip_level is None else round(float(flip_level), 6),
+        "flip_breached_bar": flip_offset,
+        "flip_breached_before_exit": None if flip_level is None else flip_timing == "before_exit",
+        "flip_timing": flip_timing,
+        "signal_metadata": dict(signal.metadata or {}),
     }
 
 
 def run_backtest(df: pd.DataFrame, strategy, symbol: str, config: dict,
-                 warmup: int = 200) -> list[dict]:
-    """Rullende vindue over df; kør strategien og simulér hver trade fremad."""
+                 warmup: int = 200, flip_exit: bool = False) -> list[dict]:
+    """Rullende vindue over df; kør strategien og simulér hver trade fremad.
+
+    **Backtesten anvender ALDRIG confidence-gaten.** Strategien kaldes med
+    ``min_confidence: 0.0`` og hvert genereret signal simuleres med de eksisterende
+    exit-regler. Det er en permanent adskillelse af to formål, ikke et forsknings-flag:
+
+        Backtesten viser alt. Gaten hører til i live.
+
+    Et filter i backtesten skjuler netop de handler der lærer os mest, og gør det
+    umuligt at måle OM filteret virker: måler man kun over tærsklen, tester man
+    scoren dér hvor den allerede har filtreret — altså hvor den betyder mindst.
+    Kapitalen beskyttes i live, hvor ``strategies.min_confidence`` er uændret; hver
+    række markeres med ``would_pass_production`` så det udsnit kan isoleres bagefter.
+
+    Overlappende positioner undgås stadig (spring frem til trade er lukket) — det er
+    backtestens porteføljekontrakt og har intet med confidence at gøre.
+    """
     df = add_all(df)
     trades: list[dict] = []
     i = warmup
-    min_conf = config.get("strategies", {}).get("min_confidence", strategy.min_confidence)
+    # Live-tærsklen bruges KUN som mærkat, aldrig som filter her.
+    production_min_conf = config.get("strategies", {}).get(
+        "min_confidence", strategy.min_confidence
+    )
     while i < len(df):
         window = df.iloc[:i].copy()
-        signal = strategy.generate_signal(window, symbol, {"min_confidence": min_conf})
-        if signal is not None and signal.confidence >= min_conf:
+        signal = strategy.generate_signal(window, symbol, {"min_confidence": 0.0})
+        if signal is not None:
             future = df.iloc[i:].reset_index(drop=True)
             if len(future) < 2:
                 break
-            trade = simulate_trade(signal, future, config)
+            trade = simulate_trade(signal, future, config, flip_exit=flip_exit)
+            trade["would_pass_production"] = signal.confidence >= production_min_conf
+            trade["production_min_confidence"] = production_min_conf
             trades.append(trade)
             # Spring frem til trade er lukket for at undgå overlappende positioner.
             i += max(trade["bars_held"], 1)
@@ -249,11 +333,12 @@ def run_backtest(df: pd.DataFrame, strategy, symbol: str, config: dict,
 # CLI
 # ---------------------------------------------------------------------------
 
-def _run_one(strategy, symbol: str, config: dict, df: pd.DataFrame) -> tuple[dict, list[dict]]:
+def _run_one(strategy, symbol: str, config: dict, df: pd.DataFrame,
+             flip_exit: bool = False) -> tuple[dict, list[dict]]:
     """Kør backtest på allerede-hentet data, returnér (metrics, trades)."""
     if df is None or df.empty or len(df) < 200:
         return metrics_mod.compute([]), []
-    trades = run_backtest(df.copy(), strategy, symbol, config)
+    trades = run_backtest(df.copy(), strategy, symbol, config, flip_exit=flip_exit)
     return metrics_mod.compute(trades), trades
 
 
@@ -323,13 +408,16 @@ def _run_single(args, config) -> int:
         print(f"Ingen data hentet for {args.symbol} {args.timeframe}")
         return 1
 
-    trades = run_backtest(df, strategy, args.symbol, config)
+    trades = run_backtest(df, strategy, args.symbol, config, flip_exit=args.flip_exit)
     result = metrics_mod.compute(trades)
     meta = {
         "strategy": args.strategy, "symbol": args.symbol, "timeframe": args.timeframe,
         "from": str(df["time"].iloc[0].date()),
         "to": str(df["time"].iloc[-1].date()),
     }
+    if args.flip_exit:
+        meta["run"] = "A2-flip-exit"
+    print(_flip_summary(trades))
     report.print_metrics(result, meta)
     if trades:
         report.save_csv(trades, meta)
@@ -354,7 +442,25 @@ def _passes(m: dict) -> bool:
     )
 
 
-def _run_all(config, timeframe: str) -> int:
+def _flip_summary(trades: list[dict]) -> str:
+    """Fordelingen af HVORNÅR flip level brydes — tallet der skiller tese fra timing.
+
+    'before_exit' = tesen var modbevist mens vi stadig sad i handlen; 'after_exit' =
+    den holdt så længe vi var med (timing/stop-problem); 'never' = den holdt hele
+    handlens mulige levetid; 'no_flip_level' = strategien kunne ikke angive et niveau.
+    """
+    if not trades:
+        return "  Flip level: ingen trades"
+    order = ["before_exit", "after_exit", "never", "no_flip_level"]
+    counts = {k: 0 for k in order}
+    for t in trades:
+        counts[t.get("flip_timing", "no_flip_level")] += 1
+    n = len(trades)
+    parts = [f"{k}={counts[k]} ({counts[k] / n:.0%})" for k in order]
+    return f"  Flip level ({n} trades): " + "  ".join(parts)
+
+
+def _run_all(config, timeframe: str, flip_exit: bool = False) -> int:
     registry = load_strategies()
     strategies = registry.get_enabled(config["strategies"]["enabled"])
     symbols = config["symbols"]
@@ -379,7 +485,8 @@ def _run_all(config, timeframe: str) -> int:
             data[symbol] = None
             print(f" FEJL: {type(e).__name__}: {str(e)[:80]}")
 
-    source_file = f"suite_{date.today().isoformat()}.csv"
+    suffix = "_flipexit" if flip_exit else ""
+    source_file = f"suite_{date.today().isoformat()}{suffix}.csv"
     rows: list[dict] = []
     db_records: list[dict] = []
     all_trades: list[dict] = []
@@ -387,7 +494,8 @@ def _run_all(config, timeframe: str) -> int:
         for symbol in symbols:
             print(f"  {strategy.name:22s} × {symbol:10s} ...", end="", flush=True)
             try:
-                m, trades = _run_one(strategy, symbol, config, data.get(symbol))
+                m, trades = _run_one(strategy, symbol, config, data.get(symbol),
+                                     flip_exit=flip_exit)
             except Exception as e:  # data-fejl pr. symbol må ikke stoppe suiten
                 print(f" FEJL: {type(e).__name__}: {str(e)[:80]}")
                 rows.append({"strategy": strategy.name, "symbol": symbol,
@@ -427,8 +535,9 @@ def _run_all(config, timeframe: str) -> int:
                 all_trades.append(t)
 
     _print_suite_table(rows)
-    _save_suite_csv(rows)
-    _save_trades_csv(all_trades)
+    print(_flip_summary(all_trades))
+    _save_suite_csv(rows, suffix)
+    _save_trades_csv(all_trades, suffix)
     # Rapporten er pynt oven på resultaterne — en fejl her må ikke koste hele
     # suitens DB-import (samme best-effort-kontrakt som save_results_to_db).
     try:
@@ -436,9 +545,14 @@ def _run_all(config, timeframe: str) -> int:
     except Exception as e:
         logger.warning("Kunne ikke generere HTML-rapport: %s", e)
         print(f"  ADVARSEL: HTML-rapport fejlede: {type(e).__name__}: {str(e)[:80]}")
-    saved = save_results_to_db(db_records)
-    if saved:
-        print(f"  {saved} backtest-resultater importeret til DB (backtest_results-tabellen)")
+    if flip_exit:
+        # A2 er en MÅLING af et hypotetisk exit, ikke botten som den kører.
+        # Research-lagets baseline skal blive ved med at afspejle live-adfærden.
+        print("  (flip-exit-kørsel — resultater importeres IKKE til DB som baseline)")
+    else:
+        saved = save_results_to_db(db_records)
+        if saved:
+            print(f"  {saved} backtest-resultater importeret til DB (backtest_results-tabellen)")
     return 0
 
 
@@ -464,9 +578,9 @@ def _print_suite_table(rows: list[dict]) -> None:
     print("=" * 132)
 
 
-def _save_suite_csv(rows: list[dict]) -> Path:
+def _save_suite_csv(rows: list[dict], suffix: str = "") -> Path:
     report.RESULTS_DIR.mkdir(exist_ok=True)
-    path = report.RESULTS_DIR / f"suite_{date.today().isoformat()}.csv"
+    path = report.RESULTS_DIR / f"suite_{date.today().isoformat()}{suffix}.csv"
     fields = ["strategy", "symbol", "trades", "open_at_end", "win_rate",
               "profit_factor", "max_dd", "sharpe", "total_pnl_pct", "wins",
               "losses", "avg_win_pct", "avg_loss_pct", "avg_bars_held", "pass"]
@@ -482,7 +596,7 @@ def _save_suite_csv(rows: list[dict]) -> Path:
     return path
 
 
-def _save_trades_csv(all_trades: list[dict]) -> Path | None:
+def _save_trades_csv(all_trades: list[dict], suffix: str = "") -> Path | None:
     """Gem alle suitens trades samlet til én CSV (én række pr. trade).
 
     Modsat report.save_csv (én fil pr. strategi×symbol) er det her hele suiten i
@@ -491,10 +605,12 @@ def _save_trades_csv(all_trades: list[dict]) -> Path | None:
     if not all_trades:
         return None
     report.RESULTS_DIR.mkdir(exist_ok=True)
-    path = report.RESULTS_DIR / f"trades_{date.today().isoformat()}.csv"
+    path = report.RESULTS_DIR / f"trades_{date.today().isoformat()}{suffix}.csv"
     fields = ["strategy_id", "symbol", "side", "entry_time", "exit_time",
               "entry_price", "exit_price", "pnl", "pnl_pct", "reason", "bars_held",
-              "breakeven_activated"]
+              "breakeven_activated", "confidence", "would_pass_production",
+              "flip_level", "flip_breached_bar", "flip_breached_before_exit",
+              "flip_timing"]
     with path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
@@ -511,13 +627,17 @@ def main() -> int:
     parser.add_argument("--timeframe", default="4h")
     parser.add_argument("--all", action="store_true",
                         help="Kør alle enabled strategier × alle symboler")
+    parser.add_argument("--flip-exit", action="store_true",
+                        help="Kørsel A2: luk også handlen på body close gennem flip "
+                             "level. Måling af et hypotetisk exit — live-adfærden "
+                             "(A1, uden flaget) er uændret observe-only.")
     args = parser.parse_args()
 
     with open("config.yaml") as f:
         config = yaml.safe_load(f)
 
     if args.all:
-        return _run_all(config, args.timeframe)
+        return _run_all(config, args.timeframe, flip_exit=args.flip_exit)
 
     if not args.strategy or not args.symbol:
         parser.error("Angiv enten --all eller både --strategy og --symbol")

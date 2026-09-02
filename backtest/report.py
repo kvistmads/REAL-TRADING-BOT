@@ -78,9 +78,15 @@ def save_csv(trades: list[dict], meta: dict) -> Path:
 # samme farve i hele rapporten.
 STRATEGY_COLORS = ["#4aa3ff", "#7c5cff", "#ffb454", "#29d391", "#ff5c6c"]
 
+# Exit-årsagerne simulate_trade faktisk kan returnere. Rapportens sektion 5 tæller
+# kun årsager der står her, så en manglende nøgle får exits til at forsvinde ud af
+# diagrammet — breakeven og time_stop var utalte indtil nu.
 REASON_COLORS = {
     "take_profit": "#29d391",
     "stop_loss": "#ff5c6c",
+    "breakeven": "#f0b429",
+    "time_stop": "#6c8cff",
+    "flip_level": "#b06cff",   # kun i A2-kørsler (--flip-exit)
     "end_of_data": "#8b94a7",
 }
 

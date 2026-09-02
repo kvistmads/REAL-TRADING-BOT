@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
+import pandas as pd
 from sqlalchemy import select
 
 from analytics.performance import PerformanceTracker
@@ -239,6 +240,12 @@ class TradingEngine:
 
             df = add_all(df)
 
+            # Flip level: OBSERVE-ONLY registrering af at handlens præmis bortfaldt.
+            # Hører hjemme her og ikke i position monitor-loopet, fordi bruddet
+            # defineres på en BODY CLOSE — monitoren kender kun tick-priser, som
+            # ikke kan skelne et wick fra et brud. Lukker ingen handel.
+            await self._check_flip_levels(symbol, df)
+
             # Klassificér regime pr. symbol til dashboardet (best-effort).
             if self._regime_gate is not None:
                 try:
@@ -419,6 +426,42 @@ class TradingEngine:
             return None
         value = float(df["atr_14"].iloc[-1])
         return value if value == value and value > 0 else None  # value == value: ikke NaN
+
+    async def _check_flip_levels(self, symbol: str, df) -> None:
+        """Registrér body closes gennem flip level for åbne positioner i `symbol`.
+
+        Best-effort: en fejl her må aldrig koste signal-generering — instrumentering
+        er underordnet handelsflowet.
+        """
+        try:
+            bars = self._closed_bars(df)
+            if bars:
+                await self.position_tracker.check_flip_levels({symbol: bars})
+        except Exception as e:
+            logger.warning(f"Flip level-tjek fejlede for {symbol}: {e}")
+
+    def _closed_bars(self, df) -> list[tuple[datetime, float]]:
+        """(bar_time, close) for de barer i df der FAKTISK er lukket.
+
+        En bar med starttid t er lukket når t + bar_seconds er passeret. Ticket
+        vækkes ``TICK_CLOSE_BUFFER`` sekunder FØR close netop for at ramme den bar
+        der er ved at lukke, så den tæller med — men ved en genstart midt i en bar
+        falder den uafsluttede bar igennem filteret. Uden det ville dens
+        øjebliks-"close" (= den aktuelle pris) kunne registrere et wick som et brud,
+        præcis det ``is_flip_breached`` er bygget til at undgå.
+        """
+        if df is None or len(df) == 0:
+            return []
+        times = df["time"] if "time" in df.columns else df.index.to_series()
+        bar = self._get_bar_seconds()
+        cutoff = utc_now() + timedelta(seconds=min(TICK_CLOSE_BUFFER, bar // 2))
+        closes = df["close"].to_numpy(dtype=float)
+        out: list[tuple[datetime, float]] = []
+        for t, close in zip(pd.to_datetime(times), closes):
+            bar_time = t.to_pydatetime()
+            if bar_time + timedelta(seconds=bar) <= cutoff:
+                out.append((bar_time, float(close)))
+        return out
 
     def _get_bar_seconds(self) -> int:
         """Barens længde i sekunder for ``timeframes.primary``.
