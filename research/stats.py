@@ -206,3 +206,50 @@ def min_detectable_diff(n_per_group: int, p_baseline: float = 0.4) -> float:
         return 1.0
     var = 2 * p_baseline * (1 - p_baseline)
     return min(1.0, (Z_95 + Z_POWER_80) * math.sqrt(var / n_per_group))
+
+
+def spearman_ci(r: float, n: int, z: float = Z_95) -> tuple[float, float]:
+    """95%-CI for en Spearman-korrelation via Fisher z-transformation.
+
+    SE = 1/sqrt(n-3) er approksimationen for Pearson; for Spearman er den let
+    optimistisk (Bonett-Wright bruger ~1.03/sqrt(n-3)). Med meget små n er
+    intervallet uanset så bredt at forskellen er akademisk — pointen med at
+    rapportere det er at VISE hvor lidt seks punkter kan afgøre.
+
+    n <= 3 → (-1, 1): der er intet interval at beregne.
+    """
+    if n <= 3 or not math.isfinite(r):
+        return (-1.0, 1.0)
+    r = max(-0.999999, min(0.999999, r))
+    zr = math.atanh(r)
+    se = 1.0 / math.sqrt(n - 3)
+    return (math.tanh(zr - z * se), math.tanh(zr + z * se))
+
+
+def mean_ci(values, z: float = Z_95) -> tuple[float, float]:
+    """95%-CI for et gennemsnit (normalapproksimation på standardfejlen)."""
+    arr = np.asarray([v for v in values if v is not None and np.isfinite(v)], dtype=float)
+    n = len(arr)
+    if n < 2:
+        return (float("nan"), float("nan"))
+    se = arr.std(ddof=1) / math.sqrt(n)
+    mean = float(arr.mean())
+    return (mean - z * se, mean + z * se)
+
+
+def breakeven_win_rate(avg_win_r: float, avg_loss_r: float, cost_r: float = 0.0) -> float:
+    """Den win rate der lige akkurat går i nul, givet de FAKTISKE haler.
+
+        WR = (L_gns + omkostning) / (W_gns + L_gns)
+
+    Udledt af EV = WR·W − (1−WR)·L − c = 0. Bemærk at antagelsen +2R/−1R giver
+    33,3%, men breakeven-stop og time-stop forvrider begge haler: nogle tabere
+    lukker nær 0R, nogle vindere lukker under 2R. Det er de observerede haler der
+    afgør om en strategi overhovedet kan tjene penge på et givet instrument.
+
+    avg_win_r og avg_loss_r er begge POSITIVE størrelser (tabets absolutværdi).
+    """
+    denom = avg_win_r + avg_loss_r
+    if denom <= 0 or not math.isfinite(denom):
+        return float("nan")
+    return (avg_loss_r + cost_r) / denom
