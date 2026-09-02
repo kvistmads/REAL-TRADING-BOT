@@ -159,6 +159,40 @@ eller seneste yfinance-1h-close). `self._last_prices` fodrer urealiseret PnL i d
 - Testfixtures: `tests/fixtures/db.temp_db` (isoleret async SQLite pr. test) og
   `tests/fixtures/engine.fake_engine` (TradingEngine uden I/O).
 
+## Omkostningsmodel + rapportering (`PRD_OMKOSTNINGER_OG_RAPPORTERING.md`)
+Backtesten havde indtil 2026-09-02 **ingen** omkostningsmodel — hvert historisk tal i
+projektet er brutto. `backtest/costs.py` + config-sektionen `backtest.costs` lukker hullet.
+
+- **Egen config-sektion.** `backtest.costs` læses KUN af `backtest/costs.py`; ingen
+  live-parameter kan påvirkes. Pr. asset-class (crypto/forex/gold/index) + symbol-overrides.
+- **Enheder er native, ikke basispunkter.** `mode: proportional` (krypto: gebyret ER en
+  brøkdel af notional) vs. `mode: contract` (futures: ticks + USD/rundtur, omregnet til en
+  brøkdel ved HVER handel). Et fast bp-tal ville fryse et prisniveau ind i modellen — guld
+  i 4.500 giver halvt så mange bp som guld i 2.250 for præcis samme tick.
+- **6E ≠ 6B.** EUR/USD har symbol-override (tick 0,00005, notional 125.000); asset-class-
+  defaulten er 6B. Ét fælles forex-tal ville overvurdere EUR/USD med ~70%.
+- **Slippage er seedet** på `(slippage_seed, strategi, symbol)` via `zlib.crc32` — ét symbol
+  kørt alene giver samme træk som i den fulde suite. `hash()` duer ikke (randomiseret pr.
+  proces). Trækket afkortes ved 0: en markedsordre får ikke bedre pris end den stillede.
+- **Kilder og antagelser: `research/output/cost_model.md`.** Kontraktspecs og gebyrsatser er
+  slået op; spread på ét tick og slippage på et halvt tick er SKØN og er markeret som sådan.
+- Størrelsesorden: krypto ~25 bp rundtur (domineret af Binances 0,20%), CME-kontrakterne
+  0,5-2 bp. Krypto koster 12-47× mere — brutto og netto afviger derfor meget forskelligt
+  pr. symbol.
+- **`metrics.compute(trades, net=True)`** / `compute_both()` → `{"gross", "net"}`. Win rate
+  KAN flytte sig mellem de to (marginal gevinst brutto → tab netto); det rapporteres som det
+  falder ud. Paper-tærsklerne (`pass`) bedømmes nu på NETTO; brutto bevares som `pass_gross`.
+  `BacktestResult`-tabellen gemmer fortsat brutto, så baselinen matcher live-paper.
+
+**Enhver backtest afsluttes med en kompakt tabel i sessionen** (maks ~15 linjer) via
+`report.format_session_table()` + `report.session_row()`. Brutto og netto står side om side,
+aldrig kun det ene. De detaljerede rapporter i `research/output/` erstattes ikke — tabellen
+gør resultatet læsbart uden at åbne en fil. Gælder alle fremtidige backtests.
+
+```bash
+.venv/bin/python research/run_flip_oos_test.py   # out-of-sample-test af flip-exit
+```
+
 ## Flip level + confidence-instrumentering (`PRD_FLIP_LEVEL_OG_CONFIDENCE.md`)
 Et **stop loss** begrænser tabet; et **flip level** er prisen hvor strategiens *begrundelse*
 holder op med at gælde. De falder ikke sammen — stoppet kan rammes mens tesen er intakt,

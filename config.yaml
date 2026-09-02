@@ -55,6 +55,78 @@ risk_defaults:
   forex:    {sl_pct: 1.5,  tp_pct: 3.0,  atr_sl_multiplier: 2.0, tp_rr_ratio: 2.0}
   gold:     {sl_pct: 3.0,  tp_pct: 6.0,  atr_sl_multiplier: 2.0, tp_rr_ratio: 2.0}
 
+# ---------------------------------------------------------------------------
+# Backtest-omkostninger. EGEN sektion — rører ikke live-parametre og læses kun
+# af backtest/costs.py. Live-handelsadfærd er upåvirket af alt herunder.
+#
+# Enheder er valgt så de er EKSAKTE og selvjusterende: futures-omkostninger er
+# defineret i kontraktens egne enheder (ticks, USD pr. rundtur) og omregnes til
+# en brøkdel af prisen ved hver handel. Et fast basispunkt-tal ville låse en
+# antaget prisniveau fast — guld i 4.500 giver dobbelt så mange bp som guld i
+# 2.250 for præcis den samme tick.
+#
+# KILDER (slået op 2026-09-02, se research/output/cost_model.md for detaljer):
+#   crypto  — Binance spot VIP 0: 0,10% maker/taker pr. side
+#   gold    — COMEX GC: 100 troy oz, tick 0,10 USD = 10 USD/kontrakt
+#   forex   — CME 6E: 125.000 EUR, tick 0,00005 = 6,25 USD
+#             CME 6B:  62.500 GBP, tick 0,0001  = 6,25 USD
+#   index   — CME ES: multiplier 50, tick 0,25 = 12,50 USD  (ikke handlet i dag)
+#
+# ANTAGELSER (ikke børsdokumentation — markeret som skøn i rapporten):
+#   spread_ticks: 1,0    front-month CME handler typisk i ét tick
+#   slippage_*:          der findes ingen offentliggjort slippage-statistik;
+#                        et halvt tick i snit er et skøn, ikke et opslag
+# ---------------------------------------------------------------------------
+backtest:
+  costs:
+    # Seed for slippage-trækket. Samme seed + samme (strategi, symbol) giver
+    # altid samme tal, uanset om der køres ét symbol eller hele suiten.
+    slippage_seed: 20260902
+
+    crypto:
+      mode: proportional          # gebyrer skalerer med notional
+      spread_pct: 0.0001          # 1 bp — majors på Binance spot
+      slippage_mean_pct: 0.0002
+      slippage_std_pct: 0.0002
+      commission_pct: 0.002       # 0,10% taker × 2 sider = 0,20% rundtur
+
+    # Asset-class-defaults = 6B (den dyrere af de to FX-kontrakter i
+    # brøkdele af prisen). EUR/USD handler på 6E og overrides nedenfor —
+    # de to kontrakter har forskellig tick og notional, og ét fælles tal
+    # ville overvurdere EUR/USD's omkostning med ~70%.
+    forex:
+      mode: contract
+      tick_size: 0.0001           # 6B British Pound
+      contract_multiplier: 62500  # 6B: 62.500 GBP
+      spread_ticks: 1.0
+      slippage_mean_ticks: 0.5
+      slippage_std_ticks: 0.5
+      commission_usd_round_turn: 4.0
+
+    gold:
+      mode: contract
+      tick_size: 0.10             # COMEX GC
+      contract_multiplier: 100    # troy oz
+      spread_ticks: 1.0
+      slippage_mean_ticks: 0.5
+      slippage_std_ticks: 0.5
+      commission_usd_round_turn: 4.0
+
+    index:                        # ES — ingen symboler bruger den i dag
+      mode: contract
+      tick_size: 0.25
+      contract_multiplier: 50
+      spread_ticks: 1.0
+      slippage_mean_ticks: 0.5
+      slippage_std_ticks: 0.5
+      commission_usd_round_turn: 4.0
+
+    # Symbol-overrides oven på asset-class-defaults (kun de nøgler der afviger).
+    symbols:
+      EUR/USD:                    # CME 6E: 125.000 EUR, tick 0,00005 = 6,25 USD
+        tick_size: 0.00005
+        contract_multiplier: 125000
+
 notifications:
   telegram:
     enabled: true

@@ -20,6 +20,8 @@ UNFINISHED_REASONS = ("end_of_data",)
 
 def _empty() -> dict:
     return {
+        "net": False, "total_cost_pct": 0.0,
+        "gross_profit_pct": 0.0, "gross_loss_pct": 0.0,
         "total_trades": 0, "closed_trades": 0, "open_at_end_count": 0,
         "wins": 0, "losses": 0, "win_rate": 0.0,
         "avg_win_pct": 0.0, "avg_loss_pct": 0.0, "profit_factor": 0.0,
@@ -28,7 +30,7 @@ def _empty() -> dict:
     }
 
 
-def compute(trades: list[dict]) -> dict:
+def compute(trades: list[dict], net: bool = False) -> dict:
     """
     Beregner performance-metrics fra en liste af simulerede trades.
     Hver trade er en dict med mindst 'pnl' (USDT) og 'pnl_pct' (%).
@@ -37,7 +39,13 @@ def compute(trades: list[dict]) -> dict:
     "exit"-pris er tilfældig, så de tælles med i ``total_trades`` og
     ``open_at_end_count``, men indgår IKKE i win-rate, Sharpe, drawdown eller
     PnL-summerne. ``closed_trades`` er antallet metrics faktisk bygger på.
+
+    net=True regner på ``pnl_net``/``pnl_pct_net`` (efter spread, slippage og
+    kurtage) i stedet for brutto. Bemærk at win_rate KAN ændre sig mellem de to:
+    en handel der lige akkurat var i plus brutto, kan være i minus netto. Det er
+    et rigtigt resultat og skal rapporteres som det falder ud.
     """
+    pnl_key, pct_key = ("pnl_net", "pnl_pct_net") if net else ("pnl", "pnl_pct")
     closed = [t for t in trades if t.get("reason") not in UNFINISHED_REASONS]
     open_at_end = len(trades) - len(closed)
 
@@ -48,13 +56,15 @@ def compute(trades: list[dict]) -> dict:
         result["open_at_end_count"] = open_at_end
         return result
 
-    pnls = [t.get("pnl", 0.0) for t in closed]
-    pcts = [t.get("pnl_pct", 0.0) for t in closed]
+    # Uden omkostningsfelter (ældre trades, eller ingen konfigureret model) falder
+    # netto tilbage på brutto frem for at regne på nuller.
+    pnls = [t.get(pnl_key, t.get("pnl", 0.0)) for t in closed]
+    pcts = [t.get(pct_key, t.get("pnl_pct", 0.0)) for t in closed]
 
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p <= 0]
-    win_pcts = [t["pnl_pct"] for t in closed if t.get("pnl", 0.0) > 0]
-    loss_pcts = [t["pnl_pct"] for t in closed if t.get("pnl", 0.0) <= 0]
+    win_pcts = [c for p, c in zip(pnls, pcts) if p > 0]
+    loss_pcts = [c for p, c in zip(pnls, pcts) if p <= 0]
 
     gross_profit = sum(wins)
     gross_loss = abs(sum(losses))
@@ -63,6 +73,8 @@ def compute(trades: list[dict]) -> dict:
     )
 
     return {
+        "net": net,
+        "total_cost_pct": round(sum(t.get("cost_pct", 0.0) for t in closed), 3),
         "total_trades": len(trades),      # alle, inkl. dem der stadig var åbne
         "closed_trades": n,               # kun rigtige exits — metrics bygger på disse
         "open_at_end_count": open_at_end,
@@ -72,12 +84,25 @@ def compute(trades: list[dict]) -> dict:
         "avg_win_pct": round(sum(win_pcts) / len(win_pcts), 3) if win_pcts else 0.0,
         "avg_loss_pct": round(sum(loss_pcts) / len(loss_pcts), 3) if loss_pcts else 0.0,
         "profit_factor": round(profit_factor, 3) if profit_factor != float("inf") else float("inf"),
+        # Summerne bag profit factor. Eksponeret fordi PF IKKE kan aggregeres ved at
+        # midle PF'er på tværs af symboler — den skal genberegnes fra summerne.
+        "gross_profit_pct": round(sum(c for c in win_pcts), 4),
+        "gross_loss_pct": round(abs(sum(c for c in loss_pcts)), 4),
         "total_pnl": round(sum(pnls), 4),
         "total_pnl_pct": round(sum(pcts), 3),
         "avg_pnl_pct": round(sum(pcts) / n, 3),
         "max_drawdown_pct": round(max_drawdown(pcts), 3),
         "sharpe": round(sharpe(pcts, closed), 3),
     }
+
+
+def compute_both(trades: list[dict]) -> dict:
+    """{"gross": {...}, "net": {...}} — begge opgørelser af det samme handelssæt.
+
+    Metrikkerne skal vises SIDE OM SIDE, ikke erstattes: pointen er at kunne se
+    præcis hvad omkostningerne æder, og et enkelt netto-tal skjuler det.
+    """
+    return {"gross": compute(trades), "net": compute(trades, net=True)}
 
 
 def max_drawdown(pcts: list[float]) -> float:
