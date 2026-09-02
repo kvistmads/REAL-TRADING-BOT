@@ -7,5 +7,7 @@ parametre eller live-beslutninger:
 - Loop B (``weekly.py``): analyserer selve kodebasen (arkitektur/performance) — rapport only.
 
 Fælles infrastruktur: ChromaDB (``chromadb_store``), Anthropic-klient (``analyst``),
-confidence-gate (``confidence_gate``). Alle guardrails er hard-coded i confidence_gate.
+forslags-gaten (modulet hedder ``confidence_gate``, config-nøglen ``reflection.proposal_gate``
+— den vurderer analystens tillid til sit eget PARAMETERFORSLAG, ikke et handelssignals
+confidence). Alle guardrails er hard-coded i modulet og kan ikke overrides af config.
 """

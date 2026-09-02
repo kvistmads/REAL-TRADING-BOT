@@ -24,6 +24,8 @@ class TrendMomentum(BaseStrategy):
 
     name = "trend_momentum"
     timeframe = "4h"
+    # Overskrives af config'ens strategies.min_confidence (0.45) i både live og
+    # backtest — se BaseStrategy.min_confidence for rækkefølgen. Fallback only.
     min_confidence = 0.65
 
     MIN_BARS = 200
@@ -131,5 +133,10 @@ class TrendMomentum(BaseStrategy):
                 "trend_strength": trend_strength,
                 "cross_strength": cross_strength,
                 "rsi_room": rsi_room,
+                # Flip level = prisen hvor BEGRUNDELSEN bortfalder, ikke hvor tabet
+                # begrænses (det er stoppets opgave). Tesen her er "trend op/ned":
+                # en body close på den forkerte side af EMA50 modsiger den, uanset
+                # om handlen står i plus eller minus. Samme niveau for long og short.
+                "flip_level": ema_50,
             },
         )

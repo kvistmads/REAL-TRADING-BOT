@@ -78,9 +78,15 @@ def save_csv(trades: list[dict], meta: dict) -> Path:
 # samme farve i hele rapporten.
 STRATEGY_COLORS = ["#4aa3ff", "#7c5cff", "#ffb454", "#29d391", "#ff5c6c"]
 
+# Exit-årsagerne simulate_trade faktisk kan returnere. Rapportens sektion 5 tæller
+# kun årsager der står her, så en manglende nøgle får exits til at forsvinde ud af
+# diagrammet — breakeven og time_stop var utalte indtil nu.
 REASON_COLORS = {
     "take_profit": "#29d391",
     "stop_loss": "#ff5c6c",
+    "breakeven": "#f0b429",
+    "time_stop": "#6c8cff",
+    "flip_level": "#b06cff",   # kun i A2-kørsler (--flip-exit)
     "end_of_data": "#8b94a7",
 }
 
@@ -663,3 +669,58 @@ function slug(v) {{ return v.replace(/\\//g, '-').replace(/ /g, '-').toLowerCase
     path.write_text(html, encoding="utf-8")
     print(f"  HTML-rapport gemt til {path}")
     return path
+
+
+# ---------------------------------------------------------------------------
+# Kompakt sessionstabel (PRD_OMKOSTNINGER_OG_RAPPORTERING del 3)
+# ---------------------------------------------------------------------------
+
+def _pf(value) -> str:
+    """Profit factor: inf har ingen meningsfuld decimalvisning."""
+    if value is None:
+        return "—"
+    return "inf" if value == float("inf") else f"{value:.2f}"
+
+
+def format_session_table(rows: list[dict], strategy: str, period: str,
+                         configuration: str = "A1 baseline") -> str:
+    """Én kompakt tabel til at printe direkte i sessionen — maks ~15 linjer.
+
+    De detaljerede rapporter i ``research/output/`` er 8-33 kB markdown: gode til
+    arkivet, ubrugelige til at få overblik i en samtale (særligt fra mobil). Denne
+    tabel erstatter dem ikke, den gør resultatet tilgængeligt uden at åbne en fil.
+
+    Hver metrik står BRUTTO og NETTO side om side, aldrig kun den ene. Win rate
+    vises også dobbelt: en handel der lige akkurat vandt brutto kan tabe netto, og
+    den forskel skal være synlig frem for bortforklaret.
+
+    rows: [{symbol, n, win_rate, win_rate_net, profit_factor, profit_factor_net,
+            total_pnl_pct, total_pnl_pct_net}, ...] — TOTAL beregnes ikke her,
+    den skal med som en række (kaldere har allerede de aggregerede tal).
+    """
+    head = f"BACKTEST  {strategy}  {period}  {configuration}"
+    lines = [
+        head,
+        f"{'symbol':<10} {'n':>4}  {'WR-brut':>7} {'WR-net':>7}  "
+        f"{'PF-brut':>7} {'PF-net':>7}  {'PnL-brut':>9} {'PnL-net':>9}",
+    ]
+    for r in rows:
+        lines.append(
+            f"{r['symbol']:<10} {r['n']:>4}  "
+            f"{r['win_rate']:>6.1f}% {r.get('win_rate_net', r['win_rate']):>6.1f}%  "
+            f"{_pf(r['profit_factor']):>7} {_pf(r.get('profit_factor_net')):>7}  "
+            f"{r['total_pnl_pct']:>+8.2f}% {r.get('total_pnl_pct_net', 0.0):>+8.2f}%"
+        )
+    return "\n".join(lines)
+
+
+def session_row(symbol: str, both: dict) -> dict:
+    """Byg én sessionstabel-række fra metrics.compute_both()-output."""
+    g, n = both["gross"], both["net"]
+    return {
+        "symbol": symbol,
+        "n": g["closed_trades"],
+        "win_rate": g["win_rate"], "win_rate_net": n["win_rate"],
+        "profit_factor": g["profit_factor"], "profit_factor_net": n["profit_factor"],
+        "total_pnl_pct": g["total_pnl_pct"], "total_pnl_pct_net": n["total_pnl_pct"],
+    }

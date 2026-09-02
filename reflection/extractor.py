@@ -94,6 +94,13 @@ def extract_closed_trades(session, lookback_hours: int) -> pd.DataFrame:
             "weekday": t.entry_time.weekday() if t.entry_time else None,
             "session": _trading_session(t.entry_time),
             "market_regime": t.market_regime,
+            # Instrumentering (PRD del C). confidence er signalets styrke ved entry —
+            # ikke analystens tillid til et forslag. None på trades åbnet før
+            # migrationen a3c1d9e4b217; de kan ikke genskabes bagudrettet.
+            "confidence": t.confidence,
+            "flip_level": t.flip_level,
+            "flip_breached_at": t.flip_breached_at,
+            "flip_breached_before_exit": t.flip_breached_before_exit,
             "regime_score": regime.get("score"),
             "adx_at_entry": float(adx_match.group(1)) if adx_match else None,
             "atr_pct_at_entry": None,  # gemmes ikke struktureret i gate_scores i dag
@@ -139,6 +146,84 @@ def aggregate_by_symbol_session_regime(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     return out
+
+
+def _outcome_stats(group: pd.DataFrame) -> pd.Series:
+    """n / win_rate / avg_pnl_pct / profit_factor for én gruppe trades."""
+    wins = group.loc[group["pnl_pct"] > 0, "pnl_pct"].sum()
+    losses = -group.loc[group["pnl_pct"] < 0, "pnl_pct"].sum()
+    if losses == 0:
+        pf = float("inf") if wins > 0 else 0.0
+    else:
+        pf = round(wins / losses, 2)
+    return pd.Series(
+        {
+            "n": len(group),
+            "win_rate": round(group["won"].mean(), 3),
+            "avg_pnl_pct": round(group["pnl_pct"].mean(), 3),
+            "profit_factor": pf,
+        }
+    )
+
+
+def aggregate_by_confidence_quartile(df: pd.DataFrame, q: int = 4) -> pd.DataFrame:
+    """Win_rate og avg_pnl_pct pr. confidence-kvartil — den dimension Loop A manglede.
+
+    Lagt VED SIDEN AF ``aggregate_by_symbol_session_regime``, ikke ind i den: de svarer
+    på to forskellige spørgsmål, og den eksisterende gruppering skal ikke ændre form.
+
+    Kvartiler frem for faste tærskler, fordi fordelingen af confidence er ukendt og
+    strategiafhængig (trend_momentum har gulv 0.35, volatility_breakout 0.40). Med for
+    få eller for ens værdier til `q` grupper falder ``pd.qcut`` tilbage på færre bånd.
+    Trades uden confidence (åbnet før instrumenteringen) udelades — de har ingen
+    kvartil at høre til.
+
+    Kaldes pr. strategi: formlerne er forskellige, så deres bånd er ikke sammenlignelige.
+    """
+    if df.empty or "confidence" not in df.columns:
+        return pd.DataFrame()
+    d = df[df["confidence"].notna()].copy()
+    if d.empty:
+        return pd.DataFrame()
+    try:
+        d["confidence_band"] = pd.qcut(d["confidence"], q=q, duplicates="drop")
+    except ValueError:  # for få unikke værdier til overhovedet at danne bånd
+        return pd.DataFrame()
+
+    out = (
+        d.groupby("confidence_band", observed=True)
+        .apply(_outcome_stats, include_groups=False)
+        .reset_index()
+    )
+    out["confidence_band"] = out["confidence_band"].astype(str)
+    return out
+
+
+def aggregate_by_flip_breach(df: pd.DataFrame) -> pd.DataFrame:
+    """Win_rate og avg_pnl_pct splittet på om flip level blev brudt før exit.
+
+    Det er dét split der skiller to modsatrettede rettelser fra hinanden:
+    brudt → tesen var forkert (justér signalet); ikke brudt, men tabt → tesen holdt
+    og stoppet var for stramt (justér stop/entry). Uden splittet ser Loop A kun
+    "strategien taber" og kan ikke vide hvilken vej den skal rette.
+
+    ``flip_breached_before_exit`` er NULL for trades uden flip level; de vises som
+    gruppen "no_flip_level" frem for at blive tavst udeladt — antallet af handler
+    UDEN et invaliderings-niveau er i sig selv et resultat.
+    """
+    if df.empty or "flip_breached_before_exit" not in df.columns:
+        return pd.DataFrame()
+    d = df.copy()
+    d["flip_group"] = (
+        d["flip_breached_before_exit"]
+        .map({True: "breached", False: "intact"})
+        .fillna("no_flip_level")
+    )
+    return (
+        d.groupby("flip_group", observed=True)
+        .apply(_outcome_stats, include_groups=False)
+        .reset_index()
+    )
 
 
 def weekly_pnl_by_strategy(df: pd.DataFrame) -> pd.DataFrame:

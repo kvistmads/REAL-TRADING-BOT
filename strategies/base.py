@@ -21,6 +21,15 @@ class Signal:
 class BaseStrategy(ABC):
     name: str
     timeframe: str
+    # NB: denne værdi er i praksis DØD i normal drift. Rækkefølgen er:
+    #   1. params["min_confidence"] (engine sender config'ens værdi ned som base-param;
+    #      backtesten sender 0.0, fordi den aldrig anvender gaten)
+    #   2. strategies.params.<id>.min_confidence  (per-strategi-override i config)
+    #   3. strategies.min_confidence              (global, i dag 0.45)
+    #   4. denne klasseattribut                   (kun hvis intet af ovenstående findes)
+    # Efter commit 19dc8d0 blev den globale værdi virksom, så tallet her (og de 0.65
+    # subklasserne sætter) vinder aldrig så længe config.yaml har nøglen. Det bliver
+    # stående som sidste fallback — ikke som den gældende tærskel.
     min_confidence: float = 0.60
 
     @abstractmethod

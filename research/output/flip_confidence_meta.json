@@ -1,0 +1,7 @@
+{
+  "run_at": "2026-09-01 20:01 UTC",
+  "timeframe": "4h",
+  "n_symbols": 6,
+  "period": "2024-08-29 \u2192 2026-09-01",
+  "production_min_confidence": 0.45
+}

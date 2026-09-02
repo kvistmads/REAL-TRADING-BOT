@@ -24,6 +24,8 @@ class ReversalContext(BaseStrategy):
 
     name = "reversal_context"
     timeframe = "4h"
+    # Overskrives af config'ens strategies.min_confidence (0.45) i både live og
+    # backtest — se BaseStrategy.min_confidence for rækkefølgen. Fallback only.
     min_confidence = 0.65
 
     MIN_BARS = 30
@@ -150,5 +152,11 @@ class ReversalContext(BaseStrategy):
                 "volume_ratio": float(volume_ratio),
                 "divergence_strength": float(divergence_strength),
                 "volume_strength": float(volume_strength),
+                # Intet flip level: en RSI-divergens er en observation om momentum,
+                # ikke en tese med et prisniveau der modbeviser den — divergensen
+                # "ophører" ikke ved en bestemt pris. Eksplicit None frem for en
+                # manglende nøgle, så forskellen på "kan ikke" og "glemt" er synlig.
+                # Strategien er ikke enabled i config; noteret her for fuldstændighed.
+                "flip_level": None,
             },
         )

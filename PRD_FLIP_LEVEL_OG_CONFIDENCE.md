@@ -21,6 +21,10 @@ Rækkefølge: **C først** (den er tidskritisk, se nedenfor), derefter A og B so
 valgt kvantitet frem for kvalitet i den nuværende fase for at få flere handler i DB'en.
 Testen skal måle om valget koster noget — den skal ikke omgøre det.
 
+Bemærk at dette gælder **live**. Backtesten anvender fremover slet ingen confidence-gate
+(se princippet i Del B) — det er ikke en ændring af Mads' valg, men en adskillelse af to
+forskellige formål.
+
 Foreslå ikke en ændring, og ret den ikke "mens du er der". Rapportér hvad tallene viser;
 beslutningen tages bagefter.
 
@@ -109,6 +113,26 @@ adfærd mens vi finder ud af det.
 **5. Loop A får en ny dimension.** Udvid `aggregate_by_symbol_session_regime` eller tilføj
 en parallel opgørelse: win_rate og avg_pnl_pct splittet på `flip_breached_before_exit`.
 
+## To backtest-kørsler: med og uden flip-exit
+
+I live er flip level **observe-only** — det lukker ingen handel. Men i backtest kan vi gratis
+besvare spørgsmålet det udskyder: *ville det have hjulpet at lukke på flip level?*
+
+Kør derfor begge:
+
+| Kørsel | Exits | Formål |
+|---|---|---|
+| **A1 baseline** | kun de eksisterende (ATR-stop, TP, breakeven, time-stop) | referencepunkt |
+| **A2 flip-exit** | de eksisterende **+ flip level lukker handlen** ved body close igennem | hvad koster/giver det? |
+
+Sammenlign pr. strategi og pr. symbol: win_rate, profit_factor, avg_pnl_pct, antal handler,
+og hvor mange handler der overhovedet blev ramt af flip-exit i A2.
+
+Rapportér også fordelingen af **hvornår** flip level brydes: før stoppet, efter stoppet,
+eller slet ikke. Det er dét tal der fortæller om tesen eller timingen fejler.
+
+**Ændr ikke live-adfærd ud fra resultatet.** A2 er en måling, ikke en beslutning.
+
 ## Leverance del A
 
 - Alembic-migration
@@ -140,22 +164,37 @@ gjorde den globale værdi virksom). For `volatility_breakout` er gulvet i formle
 altså er gaten nu **næsten inaktiv**. Det er enten gratis eller dyrt, afhængigt af om
 scoren diskriminerer, og det ved vi ikke.
 
-## KRITISK: kør forskningskørslen med min_confidence = 0
+## PRINCIP: backtesten anvender ALDRIG confidence-gaten
 
-Backtesten filtrerer i dag signaler væk under tærsklen. De blev aldrig til handler og har
-derfor intet udfald. Måler vi kun på dem der slap igennem, tester vi om confidence
-diskriminerer **inden for det bånd hvor den allerede har filtreret** — altså netop dér hvor
-den betyder mindst. Lave scores ville aldrig optræde i stikprøven.
+Dette er ikke et flag til én forskningskørsel — det er en **permanent adskillelse**:
 
-Forskningskørslen skal derfor:
+> **Backtesten viser alt. Gaten hører til i live.**
 
-- sætte `min_confidence = 0.0` **som parameter i kørslen** (fx `params={"min_confidence": 0.0}`)
-- **aldrig røre `config.yaml`**
-- simulere udfaldet for ALLE genererede signaler med de eksisterende exit-regler
-  (ATR-stop, TP, breakeven, time-stop) — også dem der i produktion ville være afvist
-- markere hver række med `would_pass_production` (confidence >= 0.45) så vi kan se begge dele
+Backtestens formål er at forstå hvordan strategien opfører sig, også når den opfører sig
+dårligt. Et filter i backtesten skjuler netop de handler der lærer os mest. Live-paper er
+hvor kapitalen beskyttes, og dér er `min_confidence: 0.45` Mads' bevidste kvantitetsvalg.
 
-Uden dette punkt måler testen det forkerte.
+**Ændr `backtest/runner.py` permanent.** I dag står der omkring linje 231:
+
+```python
+min_conf = config.get("strategies", {}).get("min_confidence", strategy.min_confidence)
+signal = strategy.generate_signal(window, symbol, {"min_confidence": min_conf})
+if signal is not None and signal.confidence >= min_conf:
+```
+
+Backtesten skal i stedet kalde strategien med `{"min_confidence": 0.0}` og **beholde hvert
+eneste genererede signal**. Simulér udfaldet for dem alle med de eksisterende exit-regler.
+Markér hver række med `would_pass_production = confidence >= config.strategies.min_confidence`,
+så vi kan se både hele billedet og det udsnit der faktisk handles live.
+
+`config.yaml` røres ikke. Live-adfærd ændres ikke.
+
+**Hvorfor det betyder noget statistisk:** filtrerer man først og måler bagefter, tester man
+kun om confidence diskriminerer *inden for det bånd hvor filteret allerede har virket* — netop
+hvor det betyder mindst. Simulation på en kendt effekt: sandheden var et gab på 23 pp mellem
+høj og lav kvartil; målt kun over 0,45 så man 20 pp, målt kun over 0,65 så man 15 pp.
+Op mod en tredjedel af effekten forsvinder, og den lave kvartil ser kunstigt god ud fordi de
+dårligste signaler aldrig kom med.
 
 ## Opgaven
 

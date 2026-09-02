@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import chromadb
+import pandas as pd
 import pytest
 import yaml
 from sqlalchemy import create_engine, select
@@ -444,3 +445,132 @@ def test_unknown_command_returns_empty(temp_db):
 
     with temp_db() as s:
         assert telegram_handler.handle_command("hej bot", s) == ""
+
+
+# ---------------------------------------------------------------------------
+# Flip level + confidence-dimensionen (PRD_FLIP_LEVEL_OG_CONFIDENCE del C)
+# ---------------------------------------------------------------------------
+
+def _closed_trade(**kw):
+    base = dict(
+        strategy_id="trend_momentum", symbol="BTC/USDT", side="long",
+        entry_price=100.0, exit_price=110.0, sl_price=90.0, tp_price=120.0,
+        quantity=1.0, stake_amount=5.0, pnl=1.0, pnl_pct=2.0,
+        entry_time=datetime(2026, 7, 20, 9, 0), exit_time=utc_now(),
+        status="closed", gate_scores={}, signal_data={}, dry_run=True,
+    )
+    base.update(kw)
+    return Trade(**base)
+
+
+def test_extractor_henter_confidence_og_flip_felter(mem_session):
+    mem_session.add(_closed_trade(confidence=0.62, flip_level=95.0,
+                                  flip_breached_before_exit=True))
+    mem_session.commit()
+
+    df = extractor.extract_closed_trades(mem_session, lookback_hours=24)
+
+    assert df.iloc[0]["confidence"] == pytest.approx(0.62)
+    assert df.iloc[0]["flip_level"] == pytest.approx(95.0)
+    assert bool(df.iloc[0]["flip_breached_before_exit"]) is True
+
+
+def test_confidence_kvartiler_deler_i_bånd():
+    df = pd.DataFrame({
+        "confidence": [0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75],
+        "pnl_pct": [-2.0, -1.0, -1.0, 1.0, 1.0, 2.0, 2.0, 3.0],
+        "won": [False, False, False, True, True, True, True, True],
+    })
+    out = extractor.aggregate_by_confidence_quartile(df)
+
+    assert len(out) == 4
+    assert out["n"].sum() == 8
+    # Konstrueret monotont: øverste bånd skal slå det nederste.
+    assert out.iloc[-1]["win_rate"] > out.iloc[0]["win_rate"]
+
+
+def test_confidence_kvartiler_udelader_trades_uden_confidence():
+    df = pd.DataFrame({
+        "confidence": [0.5, 0.6, None, None],
+        "pnl_pct": [1.0, 2.0, 3.0, 4.0],
+        "won": [True, True, True, True],
+    })
+    assert extractor.aggregate_by_confidence_quartile(df, q=2)["n"].sum() == 2
+
+
+def test_confidence_kvartiler_tåler_tom_og_ensartet_input():
+    assert extractor.aggregate_by_confidence_quartile(pd.DataFrame()).empty
+    ens = pd.DataFrame({"confidence": [0.5] * 5, "pnl_pct": [1.0] * 5,
+                        "won": [True] * 5})
+    assert extractor.aggregate_by_confidence_quartile(ens).empty
+
+
+def test_flip_breach_split_viser_alle_tre_grupper():
+    df = pd.DataFrame({
+        "flip_breached_before_exit": [True, True, False, False, None],
+        "pnl_pct": [-2.0, -3.0, 2.0, 3.0, 1.0],
+        "won": [False, False, True, True, True],
+    })
+    out = extractor.aggregate_by_flip_breach(df).set_index("flip_group")
+
+    assert set(out.index) == {"breached", "intact", "no_flip_level"}
+    assert out.loc["breached", "win_rate"] == 0.0
+    assert out.loc["intact", "win_rate"] == 1.0
+    # Handler uden flip level tælles med frem for at forsvinde: antallet er selv et fund.
+    assert out.loc["no_flip_level", "n"] == 1
+
+
+def test_gate_cfg_accepterer_både_nyt_og_gammelt_nøglenavn():
+    gate = {"auto_apply_threshold": 0.85, "telegram_threshold": 0.65,
+            "min_sample_for_auto": 30, "max_change_pct": 0.20}
+    common = {"protected_parameters": [], "min_trades_for_analysis": 200}
+
+    nyt = nightly._gate_cfg({"proposal_gate": gate, **common})
+    gammelt = nightly._gate_cfg({"confidence_gate": gate, **common})
+
+    assert nyt == gammelt
+    assert nyt["auto_apply_threshold"] == 0.85
+
+
+class _FlipRoutingAnalyst:
+    """Svarer kun på flip/confidence-prompten — de øvrige lag returnerer []."""
+
+    def __init__(self, observations):
+        self._obs = observations
+        self.prompts = []
+
+    def analyse(self, prompt, context_text=""):
+        self.prompts.append(prompt)
+        return list(self._obs) if "FLIP LEVEL:" in prompt else []
+
+
+def test_flip_observationer_kan_aldrig_auto_applies(tmp_path, temp_db, base_config):
+    """Instrumenteringen må ses af loopet, men ikke handles på — heller ikke ved conf=0.99."""
+    _seed_trades(temp_db, 200)
+    tmp_cfg = tmp_path / "config.yaml"
+    shutil.copy("config.yaml", tmp_cfg)
+    before = tmp_cfg.read_text()
+
+    # Ville uden guardrailen ramme auto_apply: conf 0.99, n 80, 2% ændring, 200 trades.
+    obs = [{"strategy_id": "trend_momentum", "type": "parameter_suggestion",
+            "parameter": "cross_strength_scale", "current_value": 0.08,
+            "suggested_value": 0.0816, "evidence": {"n": 80},
+            "confidence": 0.99, "reasoning": "flip"}]
+    analyst = _FlipRoutingAnalyst(obs)
+
+    summary = nightly.run_nightly(
+        base_config,
+        session_factory=temp_db,
+        analyst=analyst,
+        store=ObservationStore(client=chromadb.EphemeralClient(),
+                               collection_name="test_flip_observe_only"),
+        applier=ParameterApplier(audit_path=str(tmp_path / "audit.log")),
+        reporter=_DummyReporter(),
+        cfg_path=str(tmp_cfg),
+    )
+
+    assert any("FLIP LEVEL:" in p for p in analyst.prompts), "prompten skal være kaldt"
+    assert summary["auto_applied"] == 0
+    assert summary["pending"] == 0
+    assert summary["report_only"] == 1
+    assert tmp_cfg.read_text() == before

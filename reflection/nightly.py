@@ -141,6 +141,35 @@ def _prompt_layer2(strategy_id: str, agg_csv: str) -> str:
     )
 
 
+# Observationer fra flip/confidence-dimensionen markeres med denne kilde og tvinges
+# til report_only i dispatch-loopet. Instrumenteringen er ny og uafprøvet: indtil
+# backtest-resultatet fra del B ligger, må loopet SE dimensionen men ikke handle på
+# den. Markøren er kode frem for en instruktion i prompten, fordi en prompt er en
+# opfordring og en guardrail skal være håndhævet.
+OBSERVE_ONLY_SOURCE = "flip_confidence"
+
+
+def _prompt_flip_confidence(strategy_id: str, conf_csv: str, flip_csv: str) -> str:
+    return (
+        f"To nye dimensioner for strategi '{strategy_id}'.\n\n"
+        "1) CONFIDENCE-KVARTILER: strategiens egen confidence-score mod udfaldet. "
+        "Vægtene i formlen er valgt, ikke fittet — spørgsmålet er om scoren "
+        "overhovedet diskriminerer. Stiger win_rate monotont med båndet, eller er "
+        "forskellene støj? Et enkelt bånd der stikker ud er støj; en trend er signal.\n\n"
+        "2) FLIP LEVEL: prisen hvor strategiens BEGRUNDELSE bortfaldt (ikke stoppet — "
+        "stoppet begrænser tabet). Splittet adskiller to modsatrettede diagnoser:\n"
+        "   - tabt MENS flip level var intakt → tesen holdt, stoppet var for stramt\n"
+        "   - tabt EFTER flip level blev brudt → tesen var forkert\n"
+        "   - 'no_flip_level' = handler hvor strategien ikke kunne angive et niveau\n\n"
+        "Rapportér hvad tallene viser, med eksplicit forbehold for stikprøvestørrelsen "
+        "(n pr. gruppe står i tabellerne). Konkludér 'kan ikke afgøres' frem for "
+        "'virker ikke' når n er lille.\n\n"
+        'Svar i samme JSON-format. Tilladt type: "observation".\n\n'
+        f"CONFIDENCE-KVARTILER:\n{conf_csv}\n\n"
+        f"FLIP LEVEL:\n{flip_csv}"
+    )
+
+
 def _prompt_layer3(weekly_csv: str, corr_csv: str, shadow_csv: str = "", lookback_hours: int = 24) -> str:
     shadow_block = ""
     if shadow_csv:
@@ -165,9 +194,16 @@ def _prompt_layer3(weekly_csv: str, corr_csv: str, shadow_csv: str = "", lookbac
 # ---------------------------------------------------------------------------
 
 def _gate_cfg(reflection_cfg: dict) -> dict:
-    """Fladt config-dict til confidence_gate.evaluate."""
+    """Fladt config-dict til confidence_gate.evaluate.
+
+    Nøglen hedder ``proposal_gate``: gaten vurderer analystens tillid til et
+    PARAMETERFORSLAG, ikke et handelssignals confidence — tre forskellige ting i
+    kodebasen hed "confidence", og navnet her pegede på den forkerte. Det gamle
+    navn accepteres stadig, så en config fra før omdøbningen ikke vælter loopet.
+    """
+    gate = reflection_cfg.get("proposal_gate") or reflection_cfg["confidence_gate"]
     return {
-        **reflection_cfg["confidence_gate"],
+        **gate,
         "protected_parameters": reflection_cfg["protected_parameters"],
         "min_trades_for_analysis": reflection_cfg["min_trades_for_analysis"],
     }
@@ -264,6 +300,24 @@ def run_nightly(
                 agg = extractor.aggregate_by_symbol_session_regime(sub)
                 if not agg.empty:
                     raw_observations += analyst.analyse(_prompt_layer2(strategy_id, agg.to_csv(index=False)), ctx)
+
+                # Flip level + confidence-kvartiler (PRD del A pkt. 5 / del C).
+                # Egen analyse frem for en udvidelse af lag 2, så observationerne kan
+                # tvinges til report_only uden at ramme de eksisterende.
+                conf_agg = extractor.aggregate_by_confidence_quartile(sub)
+                flip_agg = extractor.aggregate_by_flip_breach(sub)
+                if not conf_agg.empty or not flip_agg.empty:
+                    flip_obs = analyst.analyse(
+                        _prompt_flip_confidence(
+                            strategy_id,
+                            conf_agg.to_csv(index=False) if not conf_agg.empty else "(ingen confidence gemt endnu)",
+                            flip_agg.to_csv(index=False) if not flip_agg.empty else "(ingen flip levels gemt endnu)",
+                        ),
+                        ctx,
+                    )
+                    for o in flip_obs:
+                        o["_source"] = OBSERVE_ONLY_SOURCE
+                    raw_observations += flip_obs
             # Lag 3 — portefølje (beriget med news-intelligence-performance)
             weekly = extractor.weekly_pnl_by_strategy(df)
             corr = extractor.strategy_correlation(weekly)
@@ -279,6 +333,14 @@ def run_nightly(
         # Dispatch hver observation gennem gaten
         for obs in raw_observations:
             decision = confidence_gate.evaluate(obs, gate_cfg, total_trades)
+            # Guardrail: flip/confidence-dimensionen er instrumentering, ikke et
+            # beslutningsgrundlag endnu. Ingen auto-apply og ingen Telegram-godkendelse
+            # herfra, uanset hvor sikker analysten lyder.
+            if obs.get("_source") == OBSERVE_ONLY_SOURCE:
+                decision.action = "report_only"
+                decision.reason = (
+                    f"observe-only ({OBSERVE_ONLY_SOURCE}): afventer backtest del B"
+                )
             if dry_run:
                 decision.action = "report_only"
                 decision.reason = f"[dry-run] {decision.reason}"

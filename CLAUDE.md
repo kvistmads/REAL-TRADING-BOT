@@ -42,7 +42,18 @@ og resampler. MT5 (Windows-only) bruges nu KUN til live tick-priser; uden den fa
 .venv/bin/python backtest/runner.py --strategy trend_momentum --symbol BTC/USDT
 # Fuld suite (alle enabled strategier × alle symboler) + suite_DATO.csv
 .venv/bin/python backtest/runner.py --all
+# Kørsel A2: som ovenfor, men flip level lukker også handlen (måling, ikke live-adfærd)
+.venv/bin/python backtest/runner.py --all --flip-exit
 ```
+
+**Backtesten anvender ALDRIG confidence-gaten.** `run_backtest` kalder strategien med
+`min_confidence: 0.0` og simulerer HVERT genereret signal; hver række markeres i stedet
+med `would_pass_production` (`confidence >= strategies.min_confidence`). Det er en
+permanent adskillelse af to formål — *backtesten viser alt, gaten hører til i live* —
+ikke et forskningsflag: filtrerer man først og måler bagefter, kan man kun teste scoren
+inden for det bånd hvor filteret allerede har virket. Kapitalen beskyttes i live, hvor
+`strategies.min_confidence: 0.45` står uændret. Overlappende positioner undgås stadig
+(spring frem til handlen er lukket) — det er porteføljekontrakten, ikke et confidence-filter.
 
 ## Learning loop (Phase 4 — reflection/)
 To feedback-loops der forbedrer botten uden at røre kapital-parametre eller live-logik.
@@ -140,10 +151,82 @@ eller seneste yfinance-1h-close). `self._last_prices` fodrer urealiseret PnL i d
 - **Loop A signal-analyse**: `reflection/signal_analyzer.analyze_signals()` kører uanset antal
   lukkede trades og ender altid i rapport + Telegram. Kræver `SignalLog.gate_scores` (migration
   `7450c4f8f05d`) for at kunne navngive den afvisende gate; ældre rækker tælles som "ukendt".
-- **Migrationer**: `f85e785151ca` (trades.breakeven_trigger), `7450c4f8f05d` (signals.gate_scores).
-  Kør `.venv/bin/alembic upgrade head` på eksisterende DB'er.
+- **Migrationer**: `f85e785151ca` (trades.breakeven_trigger), `7450c4f8f05d` (signals.gate_scores),
+  `a3c1d9e4b217` (trades.confidence + flip level-felterne).
+  Kør `.venv/bin/alembic upgrade head` på eksisterende DB'er. NB: koden skriver de nye
+  kolonner fra det øjeblik den er indlæst — kører botten under launchd (KeepAlive), skal
+  migrationen være kørt FØR den genstarter, ellers fejler INSERT på manglende kolonner.
 - Testfixtures: `tests/fixtures/db.temp_db` (isoleret async SQLite pr. test) og
   `tests/fixtures/engine.fake_engine` (TradingEngine uden I/O).
+
+## Omkostningsmodel + rapportering (`PRD_OMKOSTNINGER_OG_RAPPORTERING.md`)
+Backtesten havde indtil 2026-09-02 **ingen** omkostningsmodel — hvert historisk tal i
+projektet er brutto. `backtest/costs.py` + config-sektionen `backtest.costs` lukker hullet.
+
+- **Egen config-sektion.** `backtest.costs` læses KUN af `backtest/costs.py`; ingen
+  live-parameter kan påvirkes. Pr. asset-class (crypto/forex/gold/index) + symbol-overrides.
+- **Enheder er native, ikke basispunkter.** `mode: proportional` (krypto: gebyret ER en
+  brøkdel af notional) vs. `mode: contract` (futures: ticks + USD/rundtur, omregnet til en
+  brøkdel ved HVER handel). Et fast bp-tal ville fryse et prisniveau ind i modellen — guld
+  i 4.500 giver halvt så mange bp som guld i 2.250 for præcis samme tick.
+- **6E ≠ 6B.** EUR/USD har symbol-override (tick 0,00005, notional 125.000); asset-class-
+  defaulten er 6B. Ét fælles forex-tal ville overvurdere EUR/USD med ~70%.
+- **Slippage er seedet** på `(slippage_seed, strategi, symbol)` via `zlib.crc32` — ét symbol
+  kørt alene giver samme træk som i den fulde suite. `hash()` duer ikke (randomiseret pr.
+  proces). Trækket afkortes ved 0: en markedsordre får ikke bedre pris end den stillede.
+- **Kilder og antagelser: `research/output/cost_model.md`.** Kontraktspecs og gebyrsatser er
+  slået op; spread på ét tick og slippage på et halvt tick er SKØN og er markeret som sådan.
+- Størrelsesorden: krypto ~25 bp rundtur (domineret af Binances 0,20%), CME-kontrakterne
+  0,5-2 bp. Krypto koster 12-47× mere — brutto og netto afviger derfor meget forskelligt
+  pr. symbol.
+- **`metrics.compute(trades, net=True)`** / `compute_both()` → `{"gross", "net"}`. Win rate
+  KAN flytte sig mellem de to (marginal gevinst brutto → tab netto); det rapporteres som det
+  falder ud. Paper-tærsklerne (`pass`) bedømmes nu på NETTO; brutto bevares som `pass_gross`.
+  `BacktestResult`-tabellen gemmer fortsat brutto, så baselinen matcher live-paper.
+
+**Enhver backtest afsluttes med en kompakt tabel i sessionen** (maks ~15 linjer) via
+`report.format_session_table()` + `report.session_row()`. Brutto og netto står side om side,
+aldrig kun det ene. De detaljerede rapporter i `research/output/` erstattes ikke — tabellen
+gør resultatet læsbart uden at åbne en fil. Gælder alle fremtidige backtests.
+
+```bash
+.venv/bin/python research/run_flip_oos_test.py   # out-of-sample-test af flip-exit
+```
+
+## Flip level + confidence-instrumentering (`PRD_FLIP_LEVEL_OG_CONFIDENCE.md`)
+Et **stop loss** begrænser tabet; et **flip level** er prisen hvor strategiens *begrundelse*
+holder op med at gælde. De falder ikke sammen — stoppet kan rammes mens tesen er intakt,
+og tesen kan falde mens handlen er i profit. Uden det split kan Loop A ikke skelne
+"stoppet var for stramt" (justér stop/entry) fra "tesen var forkert" (justér signalet).
+
+- **Strategierne** angiver `Signal.metadata["flip_level"]`: `trend_momentum` → EMA50 ved
+  entry; `volatility_breakout` → `breakout_level`, altså det niveau der blev brudt
+  (resistance for long, support for short) — findes altid, modsat den oprindeligt
+  foreslåede modsatte side af rangen, som kunne være `None`; `reversal_context` →
+  eksplicit `None` (en divergens har intet prisniveau der modbeviser den).
+- **Trade** har nu `confidence`, `flip_level`, `flip_breached_at`,
+  `flip_breached_before_exit` (migration `a3c1d9e4b217`, alle nullable). `confidence` og
+  `flip_level` skrives ved entry og er **immutable** — håndhævet af en `before_update`-event
+  i `core/database.py`, ikke af kaldernes disciplin. Ikke det samme som
+  `reflection.protected_parameters`: dét beskytter en global config-værdi, det her beskytter
+  én handels præmis mod at blive omskrevet efter udfaldet er kendt.
+- **Brud måles på BODY CLOSE, ikke wick** (`position_tracker.is_flip_breached`) — et wick
+  igennem er et sweep. Tjekket ligger i `_tick_loop` (som har OHLCV), ikke i position
+  monitor-loopet (som kun har tick-priser og derfor ikke kan se forskel).
+  `engine._closed_bars()` filtrerer barer der endnu ikke er lukket fra.
+- **OBSERVE-ONLY i live**: bruddet registreres, handlen lukkes ikke. Backtesten kan
+  besvare "ville et flip-exit have hjulpet?" gratis via `--flip-exit` (A2 mod A1-baseline);
+  A2 importeres ikke til `BacktestResult`, da baseline'en skal afspejle live-adfærden.
+- **Loop A** får dimensionen via `extractor.aggregate_by_confidence_quartile` /
+  `aggregate_by_flip_breach` (lagt ved siden af `aggregate_by_symbol_session_regime`).
+  Observationer herfra tvinges til `report_only` i `nightly.py` (`OBSERVE_ONLY_SOURCE`) —
+  ingen auto-apply på uafprøvet instrumentering.
+- **Forskningskørsel**: `research/run_flip_confidence_study.py` → `research/output/`
+  (`confidence_validation.md`/`.csv`, `flip_level_note.md`). Statistikken ligger i
+  `research/stats.py` (håndskrevet: ingen scipy på numpy 2.5).
+- Config-nøglen `reflection.confidence_gate` hedder nu `reflection.proposal_gate` (modulet
+  hedder stadig `confidence_gate.py`). Tre modeller har et felt der hedder `confidence` og
+  betyder tre forskellige ting — hver har nu en docstring der siger hvilken den ikke er.
 
 ## Ikke bygget endnu (Phase 7+)
 Live trading + MEXC API-keys (Phase 7), confluence-gate (forbliver OFF),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +11,17 @@ from core.time_utils import utc_now
 from strategies.base import Signal
 
 logger = logging.getLogger(__name__)
+
+
+def is_flip_breached(side: str, flip_level: float, close: float) -> bool:
+    """Er strategiens præmis modbevist af denne bars BODY CLOSE?
+
+    Flip level er ikke et stop loss: stoppet begrænser tabet, flip level er prisen
+    hvor selve begrundelsen for handlen holder op med at gælde. Derfor bruges
+    ``close`` og ikke ``low``/``high`` — et wick igennem er et sweep, ikke en
+    invalidering (samme skelnen som i ``find_sr_levels``).
+    """
+    return close < flip_level if side == "long" else close > flip_level
 
 
 def compute_breakeven_trigger(side: str, entry_price: float, tp_price: float,
@@ -67,6 +79,17 @@ class PositionTracker:
             signal.side, current_price, tp_price, trigger_pct
         )
 
+        # Instrumentering (PRD del C): begge felter er denormaliseret ved entry og
+        # IMMUTABLE — se Trade-docstringen. flip_level=None er et gyldigt udfald:
+        # en strategi der ikke kan formulere hvad der ville modbevise den, er en
+        # holdning frem for en strategi, og dét er værd at kunne tælle.
+        flip_level = signal.metadata.get("flip_level") if signal.metadata else None
+        if flip_level is None:
+            logger.info(
+                f"Intet flip level fra {signal.strategy_id} for {signal.symbol} "
+                f"({signal.side}) — trade åbnes uden invaliderings-niveau"
+            )
+
         trade = Trade(
             id=str(uuid.uuid4()),
             strategy_id=signal.strategy_id,
@@ -88,6 +111,8 @@ class PositionTracker:
             signal_data=signal.metadata,
             dry_run=self.config["trading"]["dry_run"],
             breakeven_trigger=breakeven_trigger,
+            confidence=signal.confidence,
+            flip_level=float(flip_level) if flip_level is not None else None,
         )
 
         async with async_session_maker() as session:
@@ -118,6 +143,11 @@ class PositionTracker:
         trade.status = "closed"
         trade.pnl = round(pnl, 4)
         trade.pnl_pct = round(pnl_pct, 2)
+        # Flip level blev aldrig brudt mens handlen var åben → svaret på
+        # "blev præmisen modbevist før exit?" er nu et endeligt Nej, ikke "endnu ikke".
+        # Uden flip level forbliver feltet NULL: spørgsmålet giver ikke mening.
+        if trade.flip_level is not None and trade.flip_breached_before_exit is None:
+            trade.flip_breached_before_exit = False
 
         async with async_session_maker() as session:
             db_trade = await session.get(Trade, trade_id)
@@ -127,6 +157,7 @@ class PositionTracker:
                 db_trade.status = trade.status
                 db_trade.pnl = trade.pnl
                 db_trade.pnl_pct = trade.pnl_pct
+                db_trade.flip_breached_before_exit = trade.flip_breached_before_exit
                 await session.commit()
 
         self._daily_pnl += pnl
@@ -210,6 +241,62 @@ class PositionTracker:
             await self.close_position(trade_id, price, "time_stop")
             for trade_id, price in to_close
         ]
+
+    async def check_flip_levels(
+        self, closed_bars: dict[str, list[tuple[datetime, float]]]
+    ) -> list[Trade]:
+        """Registrér første body close gennem flip level. **OBSERVE-ONLY.**
+
+        Lukker INGEN handel og rører ikke SL/TP — de eksisterende exits er uændrede.
+        Formålet er at kunne skelne "stoppet var for stramt" (tesen holdt) fra "tesen
+        var forkert" (flip brudt), som Loop A ikke kan se i dag.
+
+        closed_bars: {symbol: [(bar_time, close), ...]} for barer der FAKTISK er lukket
+        — engine'en filtrerer de endnu-uafsluttede fra, så et wick midt i en bar aldrig
+        registreres som et brud. Kun barer der starter EFTER entry tæller.
+        """
+        breached: list[Trade] = []
+        for trade_id, trade in list(self._open_positions.items()):
+            if trade.flip_level is None or trade.flip_breached_at is not None:
+                continue
+            bars = closed_bars.get(trade.symbol)
+            if not bars or trade.entry_time is None:
+                continue
+            hit = next(
+                (
+                    (bar_time, close)
+                    for bar_time, close in bars
+                    if bar_time > trade.entry_time
+                    and is_flip_breached(trade.side, trade.flip_level, close)
+                ),
+                None,
+            )
+            if hit is None:
+                continue
+            bar_time, close = hit
+            await self._mark_flip_breached(trade_id, bar_time)
+            breached.append(trade)
+            logger.info(
+                f"FLIP LEVEL BRUDT (observation, handlen fortsætter): {trade.side} "
+                f"{trade.symbol} close={close:.4f} gennem flip={trade.flip_level:.4f} "
+                f"@ {bar_time} [{trade.strategy_id}]"
+            )
+        return breached
+
+    async def _mark_flip_breached(self, trade_id: str, when: datetime) -> None:
+        """Skriv brud-tidspunktet (in-memory + DB). flip_level selv røres ALDRIG."""
+        trade = self._open_positions.get(trade_id)
+        if trade is None:
+            return
+        trade.flip_breached_at = when
+        trade.flip_breached_before_exit = True
+
+        async with async_session_maker() as session:
+            db_trade = await session.get(Trade, trade_id)
+            if db_trade:
+                db_trade.flip_breached_at = when
+                db_trade.flip_breached_before_exit = True
+                await session.commit()
 
     async def check_sl_tp(self, current_prices: dict[str, float]) -> list[Trade]:
         to_close: list[tuple[str, float, str]] = []
