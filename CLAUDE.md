@@ -228,6 +228,29 @@ og tesen kan falde mens handlen er i profit. Uden det split kan Loop A ikke skel
   hedder stadig `confidence_gate.py`). Tre modeller har et felt der hedder `confidence` og
   betyder tre forskellige ting — hver har nu en docstring der siger hvilken den ikke er.
 
+## Kendte forhold ved den kørende bot
+Fund fra research-kørslerne der handler om **produktionen**, ikke om statistik. De er
+skrevet ned her fordi de overlever de rapporter de kom fra. **Ingen af dem er rettet, og
+ingen ændring er foreslået** — de står som observationer til en senere beslutning.
+
+- **`reflection.news_intelligence`-agtig død konfiguration, nr. 1:**
+  `gates.regime.volatile_min_confidence: 0.75` ramte **3 af 432 handler** i to års
+  backtest. Volatile-regimet kræver ATR/close > 4%, hvilket næsten aldrig indtræffer på
+  4h-barer. Tærsklen ligner en beslutning uden at være det.
+- **Død konfiguration, nr. 2:** `strategies.min_confidence: 0.45` afviste **3 af 686**
+  genererede signaler (`research/output/confidence_validation.md`). For
+  `volatility_breakout` er den aritmetisk inaktiv — strategiens laveste observerede
+  confidence er 0,548, altså over tærsklen.
+  Samme mønster to gange: en indstilling der ser ud til at styre noget, men ikke gør det.
+- **Regime-gaten blokerer 72,5% af `trend_momentum`s handler** i produktion, og dens
+  gavn kan **ikke påvises**: tilladte handler gav +0,0651 R mod blokeredes −0,0534 R,
+  men gaten vender fortegn mellem de to halvdele af perioden, og forskellen (0,12 R)
+  er langt under den mindst detekterbare (0,42 R). Se `research/output/regime_gate_test.md`.
+- **Gaten skelner ikke mellem "markedet er sideways" og "jeg kan ikke vurdere det".**
+  `classify()` returnerer `SIDEWAYS` både ved reelt sideways-marked og ved manglende/NaN
+  ADX eller for kort historik. For `trend_momentum` betyder begge dele blokering.
+  (Empirisk er det ikke aktuelt: 0 af 432 handler havde ugyldig ADX.)
+
 ## Ikke bygget endnu (Phase 7+)
 Live trading + MEXC API-keys (Phase 7), confluence-gate (forbliver OFF),
 FastAPI-dashboard (HTML-dashboardet dækker behovet), Twitter/X, multi-exchange.
