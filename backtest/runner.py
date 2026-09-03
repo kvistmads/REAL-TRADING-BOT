@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from backtest import costs as costs_mod  # noqa: E402
 from backtest import metrics as metrics_mod  # noqa: E402
 from backtest import report  # noqa: E402
+from backtest import rnorm  # noqa: E402
 from data.fetcher import YFINANCE_SYMBOL_MAP as YFINANCE_MAP  # noqa: E402
 from data.indicators import add_all  # noqa: E402
 from strategies.base import BaseStrategy  # noqa: E402
@@ -183,11 +184,19 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict,
     sl, tp = _resolve_sl_tp(signal, entry_price, config, atr=atr)
     stake = config["trading"]["stake_amount"]
 
+    # R låses HER, før breakeven kan flytte stoppet. Flyttede vi R med stoppet,
+    # ville en dårlig handel kunne se god ud fordi risikoen blev omskrevet undervejs.
+    # atr_status skelner nan/zero/missing, fordi zero typisk betyder flade barer
+    # (High == Low) — et datakvalitetsproblem, ikke et R-regnskabsspørgsmål.
+    _atr_value, _atr_state = rnorm.atr_status(future_df)
+    risk = rnorm.risk_fields(entry_price, sl, signal, _atr_value, _atr_state)
+
     trigger_pct = config.get("trading", {}).get("breakeven_trigger_pct", 0.5)
     breakeven_trigger = _breakeven_trigger(signal.side, entry_price, tp, trigger_pct)
     breakeven_activated = False
     max_bars = config.get("trading", {}).get("max_bars_held", 24)
 
+    sl_initial = sl
     flip_level = (signal.metadata or {}).get("flip_level")
     flip_horizon = max_bars if max_bars else len(future_df) - 1
     flip_offset = _flip_breach_offset(signal, future_df, flip_horizon)
@@ -283,6 +292,10 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict,
         "flip_breached_before_exit": None if flip_level is None else flip_timing == "before_exit",
         "flip_timing": flip_timing,
         "signal_metadata": dict(signal.metadata or {}),
+        # R-normalisering: risikoen ved INDGANG. r_multiple beregnes efter
+        # omkostningsmodellen (add_r_multiples), så brutto og netto deler nævner.
+        **risk,
+        "initial_sl": round(float(sl_initial), 8),
     }
 
 
@@ -328,7 +341,9 @@ def run_backtest(df: pd.DataFrame, strategy, symbol: str, config: dict,
         else:
             i += 1
     # Netto-felter oven på brutto — brutto røres ikke, begge skal kunne vises.
-    return costs_mod.apply_costs_to_trades(trades, config, strategy.name, symbol)
+    costs_mod.apply_costs_to_trades(trades, config, strategy.name, symbol)
+    # R-multipler til sidst: de har brug for både brutto og netto.
+    return rnorm.add_r_multiples(trades)
 
 
 # ---------------------------------------------------------------------------
