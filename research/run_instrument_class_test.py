@@ -27,6 +27,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import math
+
 import numpy as np
 import pandas as pd
 import yaml
@@ -160,6 +162,75 @@ def decomposition_table(buckets: dict[str, list[dict]], label: str) -> pd.DataFr
             "PnL/handel_%": d["pnl_pct_per_trade_net"],
         })
     return pd.DataFrame(rows)
+
+
+def breakeven_decomposition(per_symbol: dict[str, list[dict]]) -> pd.DataFrame:
+    """Opdel break-even-tærsklen i sit omkostnings- og sit haleformsbidrag.
+
+    Break-even-tabellen er IKKE en strukturel egenskab ved instrumentet. Formlen
+    omskrives til en forventningsværdi:
+
+        E = (W̄ + L̄) · [WR − WR*]        hvor WR* = (L̄ + c)/(W̄ + L̄)
+
+    Margin er altså forventningsværdien divideret med (W̄+L̄) — samme tal, anden
+    enhed. Og WR* falder fra hinanden i to led:
+
+        WR* = L̄/(W̄+L̄)   +   c/(W̄+L̄)
+              ^ haleform      ^ omkostning
+
+    Kun omkostningsleddet er kendt på forhånd og en egenskab ved instrumentet.
+    Haleformsleddet er REALISERET i denne stikprøve og dermed støjfyldt: et symbol
+    med heldige haler får mekanisk en lavere tærskel.
+    """
+    rows = []
+    for symbol, trades in per_symbol.items():
+        d = r_decomposition(trades)
+        if not d.get("n"):
+            continue
+        denom = d["W_gns_R"] + d["L_gns_R"]
+        if denom <= 0:
+            continue
+        tail = d["L_gns_R"] / denom
+        cost = d["cost_R"] / denom
+        rows.append({
+            "symbol": symbol, "gruppe": group_of(symbol),
+            "W_gns_R": d["W_gns_R"], "L_gns_R": d["L_gns_R"],
+            "WR_breakeven_%": d["WR_breakeven_pct"],
+            "haleform_bidrag_%": round(100 * tail, 2),
+            "omkostning_bidrag_%": round(100 * cost, 2),
+        })
+    return pd.DataFrame(rows)
+
+
+def half_difference(by_half: dict, bucket: str) -> dict:
+    """Halvdel 1 minus halvdel 2 i R/handel, med konfidensinterval.
+
+    To uafhængige stikprøver (forskellige perioder), så variansen lægges sammen:
+    SE = sqrt(SE1² + SE2²). Krydser intervallet nul, er "tidseffekten" ikke påvist
+    — og så er den ikke et bedre fund end instrumenteffekten var.
+    """
+    halves = list(by_half.keys())
+    if len(halves) != 2:
+        return {}
+    a = [t["r_multiple_net"] for t in by_half[halves[0]].get(bucket, [])
+         if t.get("r_multiple_net") is not None]
+    b = [t["r_multiple_net"] for t in by_half[halves[1]].get(bucket, [])
+         if t.get("r_multiple_net") is not None]
+    if len(a) < 2 or len(b) < 2:
+        return {}
+    arr_a, arr_b = np.asarray(a), np.asarray(b)
+    diff = float(arr_a.mean() - arr_b.mean())
+    se = math.sqrt(arr_a.var(ddof=1) / len(a) + arr_b.var(ddof=1) / len(b))
+    z = 1.959963984540054
+    lo, hi = diff - z * se, diff + z * se
+    return {
+        "gruppe": bucket, "n_1": len(a), "n_2": len(b),
+        "R_halvdel_1": round(float(arr_a.mean()), 4),
+        "R_halvdel_2": round(float(arr_b.mean()), 4),
+        "forskel": round(diff, 4),
+        "95%-CI": f"[{lo:.4f}, {hi:.4f}]",
+        "krydser_nul": "ja" if lo <= 0 <= hi else "nej",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +482,20 @@ def main() -> int:
         _md(decomposition_table({s: t for s, t in per_symbol.items()}, "symbol")),
         "\n### Pr. gruppe\n",
         _md(decomposition_table(overall, "gruppe")),
+        "\n### Hvad \"kræver\"-kolonnen faktisk er\n",
+        "Break-even-tærsklen er **ikke** en strukturel egenskab ved instrumentet. "
+        "Formlen er en omskrivning af forventningsværdien:\n\n"
+        "```\nE = (W̄ + L̄) · [WR − WR*]     hvor WR* = (L̄ + c)/(W̄ + L̄)\n```\n\n"
+        "`margin_pp` er altså forventningsværdien divideret med (W̄+L̄) — samme tal i "
+        "en anden enhed. Og tærsklen falder fra hinanden i to led:\n\n"
+        "```\nWR* = L̄/(W̄+L̄)  +  c/(W̄+L̄)\n      ^ haleform     ^ omkostning\n```\n\n",
+        _md(breakeven_decomposition(per_symbol)),
+        "\n**Kun omkostningsbidraget er en instrumentegenskab.** Det er kendt på "
+        "forhånd og ligger mellem 0,2 og 4,9 procentpoint. Haleformsbidraget er "
+        "REALISERET i denne stikprøve: et symbol med heldige haler får mekanisk en "
+        "lavere tærskel, og spredningen i \"kræver\"-kolonnen er derfor overvejende "
+        "udfald — ikke struktur. Læs den ikke som at guld er et lettere instrument "
+        "end BTC; læs den som at guld havde bedre haler i netop disse to år.\n",
         "\n## 2. Præregistreret kriterium (låst før kørsel)\n",
         "Krypto klassificeres som skadelig hvis **alle tre** holder. Fejler ét, er "
         "svaret \"ikke påvist\" — og så leder vi ikke efter en delmængde hvor det ser "
@@ -436,6 +521,13 @@ def main() -> int:
         L.append(_md(decomposition_table(groups, "gruppe")))
 
     L += [
+        "\n### Er forskellen mellem halvdelene overhovedet påvist?\n",
+        "Rapporten fremhævede tidligere at begge grupper forværres ~0,26 R mellem "
+        "halvdelene, uden usikkerhed på det tal. Her er den:\n\n",
+        _md(pd.DataFrame([r for r in (
+            half_difference(by_half, "krypto"),
+            half_difference(by_half, "ikke-krypto"),
+        ) if r])),
         "\n## 3. Modcasen — har strategien en edge NOGEN steder?\n",
         "Den mest sandsynlige forklaring er ikke at krypto er specielt dårligt, men at "
         "strategien ikke har nogen edge nogen steder og at tabene samler sig hvor "

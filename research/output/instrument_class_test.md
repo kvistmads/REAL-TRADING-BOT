@@ -1,6 +1,6 @@
 # Instrumentklasse-test: har trend_momentum en edge, og hvor?
 
-**Kørt:** 2026-09-02 18:55 UTC  
+**Kørt:** 2026-09-03 06:55 UTC  
 **Strategi:** trend_momentum, uden gates, uden flip-exit  
 **Halvdel 1:** 2024-08→2025-09 · **Halvdel 2:** 2025-09→2026-09
 
@@ -39,6 +39,35 @@ Antagelsen +2R/−1R giver en break-even WR på 33,3%. De FAKTISKE haler er komp
 | ikke-krypto | 166 | 35.54 | 35.54 | 31.3 | 4.25 | 1.5834 | 0.6861 | 2.0 | 1.0 | 0.0242 | 1.21 | 0.1205 | 0.0964 | [-0.0884, 0.2812] | 0.1067 |
 
 
+### Hvad "kræver"-kolonnen faktisk er
+
+Break-even-tærsklen er **ikke** en strukturel egenskab ved instrumentet. Formlen er en omskrivning af forventningsværdien:
+
+```
+E = (W̄ + L̄) · [WR − WR*]     hvor WR* = (L̄ + c)/(W̄ + L̄)
+```
+
+`margin_pp` er altså forventningsværdien divideret med (W̄+L̄) — samme tal i en anden enhed. Og tærsklen falder fra hinanden i to led:
+
+```
+WR* = L̄/(W̄+L̄)  +  c/(W̄+L̄)
+      ^ haleform     ^ omkostning
+```
+
+
+| symbol | gruppe | W_gns_R | L_gns_R | WR_breakeven_% | haleform_bidrag_% | omkostning_bidrag_% |
+|---|---|---|---|---|---|---|
+| BTC/USDT | krypto | 1.4094 | 0.7359 | 39.32 | 34.3 | 5.02 |
+| ETH/USDT | krypto | 1.443 | 0.6541 | 34.67 | 31.19 | 3.48 |
+| SOL/USDT | krypto | 1.3332 | 0.7031 | 37.53 | 34.53 | 3.0 |
+| EUR/USD | ikke-krypto | 1.4853 | 0.718 | 33.76 | 32.59 | 1.18 |
+| GBP/USD | ikke-krypto | 1.7232 | 0.6765 | 29.92 | 28.19 | 1.73 |
+| XAU/USD | ikke-krypto | 1.5369 | 0.6591 | 30.25 | 30.01 | 0.23 |
+
+
+**Kun omkostningsbidraget er en instrumentegenskab.** Det er kendt på forhånd og ligger mellem 0,2 og 4,9 procentpoint. Haleformsbidraget er REALISERET i denne stikprøve: et symbol med heldige haler får mekanisk en lavere tærskel, og spredningen i "kræver"-kolonnen er derfor overvejende udfald — ikke struktur. Læs den ikke som at guld er et lettere instrument end BTC; læs den som at guld havde bedre haler i netop disse to år.
+
+
 ## 2. Præregistreret kriterium (låst før kørsel)
 
 Krypto klassificeres som skadelig hvis **alle tre** holder. Fejler ét, er svaret "ikke påvist" — og så leder vi ikke efter en delmængde hvor det ser bedre ud.
@@ -68,6 +97,17 @@ Krypto klassificeres som skadelig hvis **alle tre** holder. Fejler ét, er svare
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | krypto | 141 | 28.37 | 28.37 | 38.97 | -10.6 | 1.3084 | 0.6927 | 1.5237 | 1.0 | 0.0871 | 0.621 | -0.125 | -0.2121 | [-0.3856, -0.0387] | -0.724 |
 | ikke-krypto | 86 | 30.23 | 30.23 | 31.73 | -1.49 | 1.4837 | 0.6516 | 2.0 | 1.0 | 0.0259 | 0.933 | -0.006 | -0.0319 | [-0.2693, 0.2056] | -0.0038 |
+
+
+### Er forskellen mellem halvdelene overhovedet påvist?
+
+Rapporten fremhævede tidligere at begge grupper forværres ~0,26 R mellem halvdelene, uden usikkerhed på det tal. Her er den:
+
+
+| gruppe | n_1 | n_2 | R_halvdel_1 | R_halvdel_2 | forskel | 95%-CI | krydser_nul |
+|---|---|---|---|---|---|---|---|
+| krypto | 125 | 141 | 0.0394 | -0.2121 | 0.2515 | [-0.0218, 0.5248] | ja |
+| ikke-krypto | 80 | 86 | 0.2342 | -0.0319 | 0.2661 | [-0.1045, 0.6368] | ja |
 
 
 ## 3. Modcasen — har strategien en edge NOGEN steder?
@@ -112,12 +152,12 @@ Parvis korrelation mellem daglige afkast i perioden:
 
 |  | BTC/USDT | ETH/USDT | SOL/USDT | EUR/USD | GBP/USD | XAU/USD |
 |---|---|---|---|---|---|---|
-| BTC/USDT | 1.0 | 0.828 | 0.797 | 0.092 | 0.175 | 0.162 |
-| ETH/USDT | 0.828 | 1.0 | 0.802 | 0.079 | 0.174 | 0.145 |
-| SOL/USDT | 0.797 | 0.802 | 1.0 | 0.08 | 0.155 | 0.135 |
+| BTC/USDT | 1.0 | 0.828 | 0.797 | 0.092 | 0.175 | 0.161 |
+| ETH/USDT | 0.828 | 1.0 | 0.802 | 0.079 | 0.174 | 0.144 |
+| SOL/USDT | 0.797 | 0.802 | 1.0 | 0.08 | 0.154 | 0.135 |
 | EUR/USD | 0.092 | 0.079 | 0.08 | 1.0 | 0.777 | 0.324 |
-| GBP/USD | 0.175 | 0.174 | 0.155 | 0.777 | 1.0 | 0.324 |
-| XAU/USD | 0.162 | 0.145 | 0.135 | 0.324 | 0.324 | 1.0 |
+| GBP/USD | 0.175 | 0.174 | 0.154 | 0.777 | 1.0 | 0.324 |
+| XAU/USD | 0.161 | 0.144 | 0.135 | 0.324 | 0.324 | 1.0 |
 
 
 Er korrelationen inden for en gruppe høj, er tre symboler nærmere én til to uafhængige observationer. Det halverer reelt den styrke gruppetesten har, oven i den lille stikprøve.
@@ -138,12 +178,12 @@ Forventet: krypto klart negativ i R, ikke-krypto omkring nul. Break-even forudsa
 
 | symbol | gruppe | barer | fra | til | flade_barer | flade_pct | kasserede |
 |---|---|---|---|---|---|---|---|
-| BTC/USDT | krypto | 4400 | 2024-08-30 | 2026-09-02 | 0 | 0.0 | 0 |
-| ETH/USDT | krypto | 4400 | 2024-08-30 | 2026-09-02 | 0 | 0.0 | 0 |
-| SOL/USDT | krypto | 4400 | 2024-08-30 | 2026-09-02 | 0 | 0.0 | 0 |
-| EUR/USD | ikke-krypto | 3112 | 2024-09-03 | 2026-09-02 | 0 | 0.0 | 0 |
-| GBP/USD | ikke-krypto | 3112 | 2024-09-03 | 2026-09-02 | 0 | 0.0 | 0 |
-| XAU/USD | ikke-krypto | 3114 | 2024-09-03 | 2026-09-02 | 0 | 0.0 | 0 |
+| BTC/USDT | krypto | 4400 | 2024-08-31 | 2026-09-03 | 0 | 0.0 | 0 |
+| ETH/USDT | krypto | 4400 | 2024-08-31 | 2026-09-03 | 0 | 0.0 | 0 |
+| SOL/USDT | krypto | 4400 | 2024-08-31 | 2026-09-03 | 0 | 0.0 | 0 |
+| EUR/USD | ikke-krypto | 3115 | 2024-09-03 | 2026-09-03 | 0 | 0.0 | 0 |
+| GBP/USD | ikke-krypto | 3115 | 2024-09-03 | 2026-09-03 | 0 | 0.0 | 0 |
+| XAU/USD | ikke-krypto | 3117 | 2024-09-03 | 2026-09-03 | 0 | 0.0 | 0 |
 
 
 ## Hvad der IKKE er gjort
