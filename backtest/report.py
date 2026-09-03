@@ -694,33 +694,67 @@ def format_session_table(rows: list[dict], strategy: str, period: str,
     vises også dobbelt: en handel der lige akkurat vandt brutto kan tabe netto, og
     den forskel skal være synlig frem for bortforklaret.
 
+    **Buy-and-hold står på hver linje, og det er obligatorisk.** En strategi der
+    giver 8% på et aktiv der steg 40%, er ikke en god strategi — og det kunne vi
+    ikke se, fordi vi aldrig regnede det ud. ``trend_momentum`` havde PF 0,98, men
+    PF 0,98 mod *hvad*? Baselinen betaler selv én rundtur over hele perioden, så
+    sammenligningen ikke er rigget til strategiens fordel.
+
+    De tre afkastkolonner måler ikke det samme, og det er derfor de står hver for
+    sig: ``PnL`` er den NAIVE SUM af handlernes procenter (bevaret for de kaldere
+    der bruger den), ``Komp`` er den sammensatte udgave af de samme handler, og
+    ``B&H`` er instrumentets eget afkast over perioden. Kun de to sidste er afkast.
+    Bemærk at ``Komp`` forudsætter hele kapitalen på hver handel efter tur; live
+    kører botten 5 af 100 pr. handel, så tallet er en øvre grænse, ikke kontoens
+    afkast.
+
     rows: [{symbol, n, win_rate, win_rate_net, profit_factor, profit_factor_net,
-            total_pnl_pct, total_pnl_pct_net}, ...] — TOTAL beregnes ikke her,
-    den skal med som en række (kaldere har allerede de aggregerede tal).
+            total_pnl_pct, total_pnl_pct_net, compound_pnl_pct_net, bh_return_pct,
+            bh_max_dd}, ...] — TOTAL beregnes ikke her, den skal med som en række
+    (kaldere har allerede de aggregerede tal).
     """
     head = f"BACKTEST  {strategy}  {period}  {configuration}"
     lines = [
         head,
         f"{'symbol':<10} {'n':>4}  {'WR-brut':>7} {'WR-net':>7}  "
-        f"{'PF-brut':>7} {'PF-net':>7}  {'PnL-brut':>9} {'PnL-net':>9}",
+        f"{'PF-brut':>7} {'PF-net':>7}  {'PnL-brut':>9} {'PnL-net':>9} "
+        f"{'Komp-net':>9} | {'B&H':>9} {'B&H-DD':>8}",
     ]
     for r in rows:
+        bh = r.get("bh_return_pct")
+        bh_dd = r.get("bh_max_dd")
         lines.append(
             f"{r['symbol']:<10} {r['n']:>4}  "
             f"{r['win_rate']:>6.1f}% {r.get('win_rate_net', r['win_rate']):>6.1f}%  "
             f"{_pf(r['profit_factor']):>7} {_pf(r.get('profit_factor_net')):>7}  "
-            f"{r['total_pnl_pct']:>+8.2f}% {r.get('total_pnl_pct_net', 0.0):>+8.2f}%"
+            f"{r['total_pnl_pct']:>+8.2f}% {r.get('total_pnl_pct_net', 0.0):>+8.2f}% "
+            f"{r.get('compound_pnl_pct_net', 0.0):>+8.2f}% | "
+            + (f"{bh:>+8.2f}%" if bh is not None else f"{'—':>9}")
+            + (f" {bh_dd:>7.1f}%" if bh_dd is not None else f" {'—':>8}")
         )
+    lines.append("  PnL = naiv sum af handels-%  ·  Komp = sammensat  ·  "
+                 "B&H = køb-og-behold, én rundtur, samme periode")
     return "\n".join(lines)
 
 
-def session_row(symbol: str, both: dict) -> dict:
-    """Byg én sessionstabel-række fra metrics.compute_both()-output."""
+def session_row(symbol: str, both: dict, baseline: dict | None = None) -> dict:
+    """Byg én sessionstabel-række fra metrics.compute_both()-output.
+
+    ``baseline`` er ``metrics.buy_and_hold_metrics()`` for samme instrument og
+    periode. Udelades den, står B&H-kolonnerne som "—" — men den bør ikke udelades:
+    et resultat uden baseline kan ikke fortolkes.
+    """
     g, n = both["gross"], both["net"]
-    return {
+    row = {
         "symbol": symbol,
         "n": g["closed_trades"],
         "win_rate": g["win_rate"], "win_rate_net": n["win_rate"],
         "profit_factor": g["profit_factor"], "profit_factor_net": n["profit_factor"],
         "total_pnl_pct": g["total_pnl_pct"], "total_pnl_pct_net": n["total_pnl_pct"],
+        "compound_pnl_pct": g.get("compound_pnl_pct", 0.0),
+        "compound_pnl_pct_net": n.get("compound_pnl_pct", 0.0),
     }
+    if baseline:
+        row["bh_return_pct"] = baseline["total_return_pct"]
+        row["bh_max_dd"] = baseline["max_drawdown_pct"]
+    return row
