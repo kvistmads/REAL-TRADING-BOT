@@ -6,7 +6,7 @@ trading:
   dry_run: true
   total_capital: 100
   stake_amount: 5
-  max_open_trades: 4
+  max_open_trades: 30
   leverage: 1
   breakeven_trigger_pct: 0.5   # Flyt SL til entry når 50% af TP-afstand er nået
   max_bars_held: 24            # Time-stop: 24 barer × 4h = 4 døgn
@@ -51,9 +51,9 @@ gates:
 # sl_pct/tp_pct er FALLBACK når ATR ikke er tilgængelig. Ellers:
 #   SL-afstand = atr_sl_multiplier × ATR(14),  TP-afstand = tp_rr_ratio × SL-afstand.
 risk_defaults:
-  crypto:   {sl_pct: 10.0, tp_pct: 20.0, atr_sl_multiplier: 2.0, tp_rr_ratio: 2.0}
-  forex:    {sl_pct: 1.5,  tp_pct: 3.0,  atr_sl_multiplier: 2.0, tp_rr_ratio: 2.0}
-  gold:     {sl_pct: 3.0,  tp_pct: 6.0,  atr_sl_multiplier: 2.0, tp_rr_ratio: 2.0}
+  crypto:   {sl_pct: 10.0, tp_pct: 20.0, atr_sl_multiplier: 2.0, tp_rr_ratio: 1.5}
+  forex:    {sl_pct: 1.5,  tp_pct: 3.0,  atr_sl_multiplier: 2.0, tp_rr_ratio: 1.5}
+  gold:     {sl_pct: 3.0,  tp_pct: 6.0,  atr_sl_multiplier: 2.0, tp_rr_ratio: 1.5}
 
 # ---------------------------------------------------------------------------
 # Backtest-omkostninger. EGEN sektion — rører ikke live-parametre og læses kun

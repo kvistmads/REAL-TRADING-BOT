@@ -278,6 +278,21 @@ class TradingEngine:
                 if signal.confidence < self.config["strategies"]["min_confidence"]:
                     continue
 
+                # Guard: spring over hvis vi allerede har en åben position i SAMME
+                # symbol OG SAMME retning. Modsat retning tillades (hedging).
+                # Forhindrer at to ticks i træk åbner identiske positioner på en
+                # bar der f.eks. er synlig i begge ticks tæt på close-tidspunktet.
+                existing_same_dir = [
+                    p for p in self.position_tracker.get_open_by_symbol(symbol)
+                    if p.side == signal.side
+                ]
+                if existing_same_dir:
+                    logger.info(
+                        f"SKIP {strategy.name}: {signal.side} {symbol} — "
+                        f"åben position eksisterer allerede (id={existing_same_dir[0].id[:8]})"
+                    )
+                    continue
+
                 self.signals_today += 1
 
                 logger.info(
