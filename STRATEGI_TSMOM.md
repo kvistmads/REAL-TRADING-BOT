@@ -291,3 +291,46 @@ ikke som et mål.
 For at fordoble Sharpe fra 1,0 til 2,0 kræves fire gange så mange uafhængige
 væddemål — fra 2,7 til omkring 11. Det er tolv forskellige mekanismer der ikke
 fejler samtidig, ikke flere instrumenter i samme familie.
+
+---
+
+## 11. Uafprøvet udvidelse — FX long/short
+
+**Status: idé. Ikke bygget, ikke testet, intet datagrundlag.**
+
+`6E` og `6B` gav nul i den long-only udgave, og grunden er strukturel: valutaer har
+ingen langsigtet drift. Et kryds er et forhold mellem to valutaer — stiger den ene,
+falder den anden. Der er ingen opadgående bevægelse at fange.
+
+**Den professionelle udgave af FX-momentum er long/short: køb de stærkeste valutaer,
+sælg de svageste samtidig.** Så handler man forskellen mellem dem i stedet for at
+håbe på drift.
+
+### Hvordan den ville se ud
+
+Ved hvert månedsskifte:
+
+1. Beregn 12-måneders-afkast for hver valuta i universet
+2. Rangér dem
+3. Gå long i den øverste tredjedel, short i den nederste
+4. Vægt så porteføljen er markedsneutral — lige stor eksponering i hver retning
+
+Universet skulle være bredere end to kryds. Litteraturen bruger typisk 10-20 valutaer.
+
+### Hvorfor det er interessant her
+
+Det ville være **en anden mekanisme**, ikke bare et instrument mere. Fase 2 viste at
+diversificering fejler når man tilføjer flere instrumenter til samme mekanisme —
+strategikorrelationerne var næsten lige så høje som aktivkorrelationerne. En
+long/short-strategi tjener penge på spredningen mellem valutaer og bør derfor
+korrelere lavt med en long-only trendstrategi på aktier.
+
+Det er præcis den slags uafhængig kilde der skal til, hvis samlet Sharpe skal op.
+
+### Hvad der skal afklares før den bygges
+
+- Kan botten overhovedet gå short? Nuværende TSMOM er long-only
+- Datakilde for 10-20 valutaer på daglige barer
+- Omkostninger: dobbelt så mange positioner, plus finansiering på short-siden
+- Er cross-sectional momentum i FX stadig dokumenteret virksomt, eller er det en af
+  de effekter der er forsvundet efter offentliggørelse? Skal slås op før noget bygges
