@@ -37,3 +37,9 @@ alembic>=1.13,<2.0
 # Installeres separat på Windows-terminalen; koden fejler gracefully hvis den mangler:
 #   pip install MetaTrader5
 # MetaTrader5>=5.0.45  ; sys_platform == "win32"
+
+# Parquet til orderbook-optageren (research/orderbook_recorder.py).
+# Arkivet vokser med ~0,6 GB/aar og skal laeses med pandas bagefter; JSON
+# ville vaere ubrugelig til begge dele. Formatet er valgt FOER foerste
+# snapshot, saa arkivet ikke bliver delt i to inkompatible halvdele.
+pyarrow>=15

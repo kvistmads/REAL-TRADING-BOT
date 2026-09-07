@@ -29,6 +29,10 @@ bot_error.log
 data/historical_xau/*.csv
 data/historical_xau/*.csv.gz
 data/historical/
+# Optagede orderbook-snapshots: vokser med ~0,6 GB/aar.
+# README'en er versionsstyret, dataen er ikke.
+data/orderbook/*/
+data/orderbook/_*
 research/output/*.csv
 
 .claude/
