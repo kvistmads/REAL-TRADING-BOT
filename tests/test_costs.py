@@ -257,7 +257,21 @@ class TestSessionstabel:
         assert "WR-brut" in out and "WR-net" in out
         assert "PF-brut" in out and "PF-net" in out
         assert "PnL-brut" in out and "PnL-net" in out
-        assert "34.7%" in out and "33.3%" in out   # begge win rates, ikke kun den ene
+        assert "34.7" in out and "33.3" in out   # begge win rates, ikke kun den ene
+
+    def test_enheder_står_i_overskriften_ikke_i_cellerne(self):
+        """Tabelkonvention fra fase 2b: enheden hører til i kolonnehovedet.
+
+        Procenttegn i hver celle koster bredde i hver eneste række og gør tal
+        sværere at sammenligne på tværs. Profit factor er enhedsløs og skal IKKE
+        have et suffiks.
+        """
+        from backtest import report
+        head, row = report.format_session_table(
+            self._rows(), "s", "p", "c").splitlines()[1:3]
+        assert "WR-brut_%" in head and "PnL-net_%" in head and "B&H-DD_%" in head
+        assert "PF-brut_%" not in head          # enhedsløs
+        assert "%" not in row                   # cellerne bærer rene tal
 
     def test_header_navngiver_konfigurationen(self):
         from backtest import report

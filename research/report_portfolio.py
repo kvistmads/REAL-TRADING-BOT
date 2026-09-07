@@ -1,18 +1,24 @@
-"""Rapportgenerator for fase 2 — porteføljekombinationen."""
+"""Rapportgenerator for fase 2/2b — porteføljekombinationen."""
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
+# Fase 2's tal, FØR guld-duplikatet blev fjernet. De står her så effekten af
+# rettelsen er synlig frem for at skulle huskes.
+FASE2 = {
+    "alle_syv": {"label": "alle otte (med XAU)", "n": 8, "sharpe": 0.82, "cagr": 7.83,
+                 "maxdd": -19.0, "flat_days": 1148, "n_eff": 2.86, "n_eff_eig": 4.19,
+                 "rho": 0.257},
+    "uden_fx": {"label": "uden FX (med XAU)", "n": 6, "sharpe": 0.99, "cagr": 12.18,
+                "maxdd": -21.1, "flat_days": 1259, "n_eff": 2.51, "n_eff_eig": 3.20,
+                "rho": 0.277},
+}
+
 
 def _side_by_side(strat: pd.DataFrame, asset: pd.DataFrame, keys: list[str]) -> str:
-    """Parvis: strategikorrelation, aktivkorrelation og forskellen mellem dem.
-
-    Forskellen ER pointen. Er strategierne markant mindre korrelerede end
-    aktiverne, køber TSMOM diversificering oven i den aktiverne allerede giver.
-    Er de det ikke, er antallet af uafhængige væddemål det samme som før.
-    """
+    """Parvis: strategikorrelation, aktivkorrelation og forskellen mellem dem."""
     cs, ca = strat[keys].corr(), asset[keys].corr()
     rows = []
     for i, a in enumerate(keys):
@@ -20,8 +26,7 @@ def _side_by_side(strat: pd.DataFrame, asset: pd.DataFrame, keys: list[str]) -> 
             s, v = float(cs.loc[a, b]), float(ca.loc[a, b])
             rows.append({"par": f"{a}–{b}", "strategi": round(s, 2),
                          "aktiv": round(v, 2), "forskel": round(s - v, 2)})
-    df = pd.DataFrame(rows).sort_values("aktiv", ascending=False)
-    return df.to_string(index=False)
+    return pd.DataFrame(rows).sort_values("aktiv", ascending=False).to_string(index=False)
 
 
 def _md_table(df: pd.DataFrame) -> str:
@@ -34,248 +39,256 @@ def _md_table(df: pd.DataFrame) -> str:
 
 
 def _drawdown_date(curve: pd.Series) -> str:
-    dd = curve / curve.cummax() - 1
-    return str(dd.idxmin().date())
+    return str((curve / curve.cummax() - 1).idxmin().date())
+
+
+def _delta(new: float, old: float, unit: str = "") -> str:
+    return f"{new:.2f}{unit} (var {old:.2f}{unit}, {new - old:+.2f})"
 
 
 def build(results, strat_m, asset_m, sharpes, session,
           n_eff_rho, n_eff_eig, offdiag) -> str:
-    head = results["alle_otte"]
-    nofx = results["uden_fx"]
+    head, nofx = results["alle_syv"], results["uden_fx"]
     keys = head["keys"]
     rho_s, rho_a = offdiag(strat_m[keys].corr()), offdiag(asset_m[keys].corr())
     m, b = head["metrics"], head["baseline"]
+    res = head["res"]
+
+    change = pd.DataFrame([
+        {"mål": "Sharpe", "fase 2 (8 instr.)": FASE2["alle_syv"]["sharpe"],
+         "fase 2b (7 instr.)": m["sharpe"],
+         "ændring": round(m["sharpe"] - FASE2["alle_syv"]["sharpe"], 2)},
+        {"mål": "CAGR_%", "fase 2 (8 instr.)": FASE2["alle_syv"]["cagr"],
+         "fase 2b (7 instr.)": m["cagr"],
+         "ændring": round(m["cagr"] - FASE2["alle_syv"]["cagr"], 2)},
+        {"mål": "maxDD_%", "fase 2 (8 instr.)": FASE2["alle_syv"]["maxdd"],
+         "fase 2b (7 instr.)": m["max_drawdown_pct"],
+         "ændring": round(m["max_drawdown_pct"] - FASE2["alle_syv"]["maxdd"], 2)},
+        {"mål": "flat_år", "fase 2 (8 instr.)": round(FASE2["alle_syv"]["flat_days"] / 365.25, 1),
+         "fase 2b (7 instr.)": round(m["longest_flat_days"] / 365.25, 1),
+         "ændring": round((m["longest_flat_days"] - FASE2["alle_syv"]["flat_days"]) / 365.25, 1)},
+        {"mål": "N_eff (ρ)", "fase 2 (8 instr.)": FASE2["alle_syv"]["n_eff"],
+         "fase 2b (7 instr.)": round(head["n_eff_rho"], 2),
+         "ændring": round(head["n_eff_rho"] - FASE2["alle_syv"]["n_eff"], 2)},
+        {"mål": "ρ_strategi", "fase 2 (8 instr.)": FASE2["alle_syv"]["rho"],
+         "fase 2b (7 instr.)": round(rho_s, 3),
+         "ændring": round(rho_s - FASE2["alle_syv"]["rho"], 3)},
+    ])
+
+    nofx_change = pd.DataFrame([
+        {"mål": "Sharpe", "fase 2 (6 instr.)": FASE2["uden_fx"]["sharpe"],
+         "fase 2b (5 instr.)": nofx["metrics"]["sharpe"],
+         "ændring": round(nofx["metrics"]["sharpe"] - FASE2["uden_fx"]["sharpe"], 2)},
+        {"mål": "CAGR_%", "fase 2 (6 instr.)": FASE2["uden_fx"]["cagr"],
+         "fase 2b (5 instr.)": nofx["metrics"]["cagr"],
+         "ændring": round(nofx["metrics"]["cagr"] - FASE2["uden_fx"]["cagr"], 2)},
+        {"mål": "maxDD_%", "fase 2 (6 instr.)": FASE2["uden_fx"]["maxdd"],
+         "fase 2b (5 instr.)": nofx["metrics"]["max_drawdown_pct"],
+         "ændring": round(nofx["metrics"]["max_drawdown_pct"] - FASE2["uden_fx"]["maxdd"], 2)},
+        {"mål": "N_eff (ρ)", "fase 2 (6 instr.)": FASE2["uden_fx"]["n_eff"],
+         "fase 2b (5 instr.)": round(nofx["n_eff_rho"], 2),
+         "ændring": round(nofx["n_eff_rho"] - FASE2["uden_fx"]["n_eff"], 2)},
+    ])
+
+    contrib = pd.DataFrame([
+        {"instrument": k,
+         "afkast_bidrag_%": res.return_contribution.get(k, 0.0),
+         "risiko_bidrag_%": res.risk_contribution.get(k, 0.0),
+         "afkast_pr_risiko": round(res.return_contribution.get(k, 0.0)
+                                   / res.risk_contribution.get(k, 1.0), 2)}
+        for k in keys
+    ]).sort_values("afkast_bidrag_%", ascending=False)
 
     sharpe_tbl = pd.DataFrame(
-        [{"instrument": k, "Sharpe": round(v, 2)} for k, v in sharpes.items()])
+        [{"instrument": k, "Sharpe": round(sharpes[k], 2)} for k in keys])
 
-    weights = head["res"].weights.tail(1).round(3).T
-    weights.columns = ["vægt"]
-    weights = weights.reset_index().rename(columns={"index": "instrument"})
+    return f"""# Fase 2b — porteføljen med ét instrument pr. aktiv
 
-    return f"""# Fase 2 — porteføljekørsel: virker diversificering på vores egne tal?
-
-**Kørsel:** de otte TSMOM-kurver kombineret til én portefølje, invers volatilitet,
-månedlig rebalancering.
-**Periode:** {head['res'].equity.index[0].date()} → {head['res'].equity.index[-1].date()}
+**Kørsel:** syv TSMOM-kurver kombineret til én portefølje, invers volatilitet,
+månedlig rebalancering. `XAU` fjernet som duplikat af `GC`.
+**Periode:** {res.equity.index[0].date()} → {res.equity.index[-1].date()}
 **Status:** research. Ingen ændring af live handelsadfærd, `config.yaml` urørt.
 
 ---
 
-## Svaret
-
-**Diversificering virker — men mindre end forventet, og af en grund der er værd at
-kende: strategikorrelationerne er næsten lige så høje som aktivkorrelationerne.**
+## Svaret: rettelsen gjorde tallene en anelse dårligere, og det er pointen
 
 ```
 {session}
 ```
 
-| Forhåndsregistreret | Forventet | Faktisk | |
-|---|---|---|---|
-| Samlet Sharpe | 1,0–1,2 | **{m['sharpe']:.2f}** | under båndet, men klart over fejlgrænsen på 0,7 |
-| maxDD | 20–25% | **{m['max_drawdown_pct']:.1f}%** | bedre end forventet |
-| longest_flat_days | markant under SPY's 1685 / QQQ's 3958 | **{m['longest_flat_days']}** | holder |
+{_md_table(change)}
 
-Ingen af de to fælder blev udløst: Sharpe er hverken ≥1,5 (som ville have peget på
-lookahead i vægtningen) eller ≤0,7 (som ville have betydet at diversificeringen ikke
-virker).
+**Sharpe faldt fra 0,82 til {m['sharpe']:.2f}.** Det er ikke et tegn på at rettelsen
+var forkert — det er et tegn på at duplikatet pyntede resultatet.
 
-**Det tal du sagde betød mest — longest_flat_days — er det der falder klarest ud.**
-Porteføljen går {m['longest_flat_days']} dage som værst uden ny egenkapitaltop, mod
-1.685 for `SPY` alene, 3.958 for `QQQ` og {b['longest_flat_days']} for ligevægtet
-køb-og-behold af de samme otte. Det er stadig godt tre år, men det er den halve
-ventetid.
+Mekanismen: med `XAU` og `GC` som to pladser fik guld **dobbelt risikobudget** under
+invers volatilitetsvægtning. Guld var samtidig et af de bedste enkeltinstrumenter
+(standalone Sharpe 0,71) og korrelerede kun 0,08 med aktier. At overvægte det ved et
+uheld hjalp derfor porteføljen. Da duplikatet forsvandt, halveredes guldets vægt, og
+porteføljen mistede eksponering mod netop den bedste diversificerende kilde.
+
+Det ændrer ikke at rettelsen er rigtig. **Ét væddemål talt to gange er stadig ét
+væddemål**, og en portefølje der ser god ud fordi den dobbelttæller en position, er
+ikke god — den er forkert opgjort. En konstruktionskorrektion måles på om den er
+sand, ikke på om den hjælper.
+
+`N_eff` faldt tilsvarende fra 2,86 til {head['n_eff_rho']:.2f}. To ting trak samme
+vej: N gik fra 8 til 7, og ρ̄ steg marginalt (fra 0,257 til {rho_s:.3f}), fordi `XAU`
+korrelerede lidt lavere end gennemsnittet med alt andet end `GC`.
+
+### Uden FX
+
+{_md_table(nofx_change)}
 
 ---
 
-## DEL 2.1 — den vigtigste måling: strategi- mod aktivkorrelation
+## DEL 1 — hvorfor `GC=F` og ikke `XAU`
 
-Du havde ret i at det var det forkerte tal jeg målte i fase 1. Her er begge.
+Valget er truffet på **datakvalitet, ikke afkast**:
 
-Gennemsnitlig parvis korrelation over de otte:
+| | `GC=F` | `XAU/USD` |
+|---|---|---|
+| Kilde | yfinance, som resten af porteføljen | ukendt MT4-feed, ét commit på GitHub |
+| Volumen | rigtig (419 nul-barer) | tick-volumen, broker-afhængig |
+| Validerede år | 2000–2026 | 2004–2024 (2025 kasseret) |
+| Roll-drift mod spot | målt til +0,04 pct-point/år | — |
+| ATR i overlapstest | reference | afveg ~20% |
 
-| | Gennemsnit | Effektive væddemål (ρ) | Effektive væddemål (egenværdier) |
+Havde valget stået på afkast, ville de to være næsten uskelnelige: standalone CAGR
+10,59% mod 10,05% og maxDD −33,3% mod −32,8%. Det er netop derfor beslutningen kan
+træffes rent på kilde og reproducerbarhed.
+
+Reglen er skrevet ind i `CLAUDE.md`: **ét instrument pr. underliggende aktiv i en
+portefølje. To tickere for samme ting er ikke diversificering.** Listen ligger i
+`research/portfolio.DUPLICATE_UNDERLYING`.
+
+---
+
+## DEL 2 — hvad bidragskolonnerne viser
+
+{_md_table(contrib)}
+
+`afkast_pr_risiko` er forholdet mellem de to andele. Over 1,0 betyder at
+instrumentet leverer mere afkast end det bruger risiko.
+
+**Det tal du bad om at kunne se med det samme, er FX-linjen.** `6E` og `6B` leverer
+tilsammen **−2,1% af afkastet** og bruger **{res.risk_contribution.get('6E', 0) + res.risk_contribution.get('6B', 0):.1f}%
+af risikoen.** De er ikke bare uden bidrag; de er negative, og de fylder en femtedel
+af risikobudgettet mens de gør det.
+
+De øvrige linjer:
+
+- **`SPY` bærer porteføljen** ({res.return_contribution.get('SPY', 0):.0f}% af afkastet
+  for {res.risk_contribution.get('SPY', 0):.0f}% af risikoen). Det er også det
+  instrument der har været med længst, så tallet er delvis en historik-effekt.
+- **`GC` er den mest effektive** ({res.return_contribution.get('GC', 0):.0f}% af
+  afkastet for kun {res.risk_contribution.get('GC', 0):.0f}% af risikoen) — netop
+  fordi den korrelerer lavt med aktierne.
+- **Krypto leverer over sin risikoandel** trods kun 9 års historik, fordi invers
+  volatilitet giver den en lille vægt og afkastet er stort.
+
+**Risikobidraget er defineret som faktisk vægt × volatilitet**, akkumuleret dag for
+dag — ikke måltvægt. En plads i kontanter bærer ingen risiko, uanset hvad den blev
+tildelt ved månedsskiftet.
+
+---
+
+## Korrelation: strategi mod aktiv
+
+| | Gennemsnit | N_eff (ρ) | N_eff (egenværdier) |
 |---|---|---|---|
-| **Strategiernes** månedlige afkast | **{rho_s:+.3f}** | **{n_eff_rho(strat_m[keys].corr()):.2f}** | {n_eff_eig(strat_m[keys].corr()):.2f} |
+| **Strategiernes** månedlige afkast | **{rho_s:+.3f}** | **{head['n_eff_rho']:.2f}** | {head['n_eff_eig']:.2f} |
 | Aktivernes månedlige afkast | {rho_a:+.3f} | {n_eff_rho(asset_m[keys].corr()):.2f} | {n_eff_eig(asset_m[keys].corr()):.2f} |
 
-**Forventningen var at strategikorrelationerne ville være markant lavere. Det er de
-ikke.** {rho_s:.3f} mod {rho_a:.3f} er en reduktion på
-{100 * (1 - rho_s / rho_a):.0f}% — reel, men ikke i nærheden af nok til at gøre otte
-instrumenter til otte væddemål.
-
-Par for par (sorteret efter aktivkorrelation):
+Konklusionen fra fase 2 står uændret efter rettelsen: **strategikorrelationerne er
+ikke markant lavere end aktivkorrelationerne.** {rho_s:.3f} mod {rho_a:.3f}.
 
 ```
 {_side_by_side(strat_m, asset_m, keys)}
 ```
 
-Tre ting at læse ud af den tabel:
+Med `XAU` ude er det tydeligere hvor det eneste reelle fald ligger: `BTC`–`ETH`
+(0,72 → 0,63). `SPY`–`QQQ` falder kun fra 0,84 til 0,81 — de to strategier går ud af
+markedet næsten samtidig, fordi de reagerer på det samme signal i det samme marked.
 
-1. **`GC`–`XAU` er 0,98 i BEGGE matricer.** Det er ikke to instrumenter, det er ét
-   metal hentet fra to kilder. Diversificering kan ikke reparere det, for der er
-   ingen uafhængighed at hente.
-2. **`SPY`–`QQQ` falder kun fra 0,84 til 0,81.** De to strategier er ude af markedet
-   på næsten samme tidspunkter, fordi de reagerer på det samme signal i det samme
-   marked. Long-only TSMOM fjerner nedture, men det fjerner dem samtidigt.
-3. **Krypto er det eneste sted mekanismen virker som håbet:** `BTC`–`ETH` falder fra
-   0,72 til 0,63, fordi de to faktisk går ud af markedet på forskellige tidspunkter.
+Forudsigelsen holder fortsat: gennemsnitlig individuel Sharpe {head['s_bar']:.2f} ×
+√{head['n_eff_rho']:.2f} = **{head['predicted_sharpe']:.2f}** forudsagt mod
+**{m['sharpe']:.2f}** faktisk.
 
-Det er svaret på hvorfor Sharpe landede på {m['sharpe']:.2f} og ikke 1,1: der er
-**{head['n_eff_rho']:.1f} effektive væddemål, ikke 4.**
-
-Forudsigelsen holder til gengæld præcist. Gennemsnitlig individuel Sharpe er
-{head['s_bar']:.2f}; {head['s_bar']:.2f} × √{head['n_eff_rho']:.2f} =
-**{head['predicted_sharpe']:.2f}** forudsagt mod **{m['sharpe']:.2f}** faktisk.
-Formlen `s × √N` virker — det var antagelsen om N der var for optimistisk.
-
-De to N-mål er ikke enige ({head['n_eff_rho']:.2f} mod {head['n_eff_eig']:.2f}), og
-uenigheden er informativ: porteføljen er **klynget**, ikke jævnt korreleret. To par
-sidder på 0,98 og 0,81 mens de fleste krydspar ligger under 0,15. ρ-udgaven antager
-at alle par er ens og straffer derfor hårdt; egenværdierne ser klyngerne. Sandheden
-ligger imellem, og den faktiske Sharpe ({m['sharpe']:.2f}) ligger da også mellem de
-to forudsigelser.
-
-### Individuelle Sharpe-tal, til reference
+### Individuelle Sharpe-tal
 
 {_md_table(sharpe_tbl)}
 
-Gennemsnit: **{head['s_bar']:.2f}** over alle otte, **{nofx['s_bar']:.2f}** uden FX.
+Gennemsnit **{head['s_bar']:.2f}** over de syv, **{nofx['s_bar']:.2f}** uden FX.
 
 ---
 
-## DEL 1 — hvordan porteføljen er bygget
+## Konstruktion og omkostninger
 
-- **Vægt:** invers volatilitet, `w_i = (1/σ_i) / Σ(1/σ_j)`, altså lige risikobidrag.
-- **σ måles bagudskuende** på 12 måneders daglige afkast frem til dagen FØR
-  rebalanceringen, og annualiseres med instrumentets eget antal barer pr. år
-  (krypto 365, futures ~252). Uden den korrektion ville krypto se ~20% mere volatil
-  ud end den er, alene på grund af kalenderen.
-- **Rebalancering:** månedligt, samtidig med TSMOM-signalet.
-- **Pladsen holder TSMOM-positionen**, ikke aktivet. Er signalet ude, står pladsens
-  kapital i kontanter, og kontanter forrentes ikke.
-- **Ingen gearing.** En plads kan aldrig købe for mere end sin egen værdi plus
-  kontantbeholdningen — og loftet levner plads til kurtagen. Uden det sidste endte
-  kontantbeholdningen på minus gebyret: et lån på 1-2 basispunkter, som ville have
-  set ud som afkast. Det blev fanget af `test_portfolio_never_uses_leverage`.
+- **Vægt:** invers volatilitet på 12 måneders bagudskuende daglige afkast, målt
+  strengt FØR rebalanceringsdagen, annualiseret med instrumentets eget antal barer
+  pr. år (krypto 365, futures ~252).
+- **Pladsen holder TSMOM-positionen**, ikke aktivet. Er signalet ude, står kapitalen
+  i kontanter, og kontanter forrentes ikke.
+- **Ingen gearing**, og loftet levner plads til kurtagen.
+- **Omkostninger:** {res.turnover_cost_pct:.2f}% af startkapitalen over
+  {m['years']:.0f} år, hvoraf **{res.rebalance_cost_share:.0f}%** er ren
+  vægtrebalancering — omsætning ud over signalskiftene, som ville være usynlig hvis
+  man kun modellerede ind- og udgange.
 
-### Omkostninger: to kilder til omsætning
-
-Samlet **{head['res'].turnover_cost_pct:.2f}%** af startkapitalen over
-{m['years']:.0f} år, hvoraf **{head['res'].rebalance_cost_share:.0f}%** er ren
-vægtrebalancering — altså omsætning ud over signalskiftene. Den del ville være
-usynlig hvis man kun havde modelleret ind- og udgange.
+Uden FX stiger omkostningerne til {nofx['res'].turnover_cost_pct:.2f}%, hvoraf
+{nofx['res'].rebalance_cost_share:.0f}% er rebalancering. Årsagen er ikke flere
+handler, men dyrere: krypto koster ~25 bp rundtur mod futures' 0,5–2 bp, og med
+færre instrumenter får krypto en større vægt.
 
 ### Instrumenterne findes ikke lige længe
 
-Porteføljen starter i 1993 med `SPY` alene. `QQQ` kommer i 1999, futures i 2001-02,
-krypto i 2018. Kapitalen fordeles kun på de instrumenter der findes, og resten står
-i kontanter. Det betyder at **det første tiår ikke er en diversificeret portefølje** —
-det er `SPY` med et TSMOM-filter.
+Porteføljen starter i 1993 med `SPY` alene; `QQQ` kommer i 1999, futures i 2001-02,
+krypto i 2018. **Det første tiår er derfor ikke en diversificeret portefølje** — det
+er `SPY` med et TSMOM-filter.
 
-Derfor står æra-linjerne i tabellen. De er beskrivende, ikke et valg af periode:
-fra 2018, hvor alle otte findes, er Sharpe
-{head['eras'].get('fra 2018 (alle 8)', ({},))[0].get('sharpe', float('nan')):.2f} —
-inde i det forhåndsregistrerede bånd. **Hovedtallet er stadig hele perioden**, som
-aftalt; æra-tallene siger hvor meget af afstanden til båndet der skyldes at
-porteføljen ikke var en portefølje endnu.
-
-**Det tydeligste enkelttal her:** porteføljens værste drawdown på
-{m['max_drawdown_pct']:.1f}% indtraf **{_drawdown_date(head['res'].equity)}** — altså i
-den periode hvor porteføljen bestod af `SPY` alene. Fra 2003 og frem, hvor mindst
-fem instrumenter er med, er det værste fald {head['eras']['fra 2003 (≥5 instr.)'][0]['max_drawdown_pct']:.1f}%.
-Det maksimale tab i hovedtallet måler altså ikke en diversificeret portefølje; det
-måler ét instrument. Baselinens {b['max_drawdown_pct']:.1f}% indtraf til
-sammenligning {_drawdown_date(head['res'].benchmark)}, hvor alle otte var med.
+Det ses tydeligst på drawdown: porteføljens værste fald på {m['max_drawdown_pct']:.1f}%
+indtraf **{_drawdown_date(res.equity)}**, mens porteføljen bestod af `SPY` alene. Fra
+2003 og frem er det værste fald
+{head['eras']['fra 2003 (≥5 instr.)'][0]['max_drawdown_pct']:.1f}%. Hovedtallets maxDD
+måler altså ikke en diversificeret portefølje.
 
 ---
 
-## DEL 3 — FX-varianten
+## Baseline
 
-{_md_table(pd.DataFrame([
-    {"univers": n, "n": len(r["keys"]), "CAGR": r["metrics"]["cagr"],
-     "maxDD": r["metrics"]["max_drawdown_pct"], "Sharpe": r["metrics"]["sharpe"],
-     "flat_dage": r["metrics"]["longest_flat_days"],
-     "ρ_strategi": round(r["rho_bar"], 3), "N_eff": round(r["n_eff_rho"], 2)}
-    for n, r in results.items()]))}
+Ligevægtet køb-og-behold af de samme syv, samme periode, én rundtur pr. instrument.
+Porteføljen giver **{m['cagr']:.2f}%** mod baselinens **{b['cagr']:.2f}%** med
+**{m['max_drawdown_pct']:.1f}%** mod **{b['max_drawdown_pct']:.1f}%** i maksimalt
+fald og **{m['longest_flat_days'] / 365.25:.1f}** mod
+**{b['longest_flat_days'] / 365.25:.1f}** år uden ny top.
 
-Uden `6E`/`6B` stiger CAGR fra {m['cagr']:.2f}% til {nofx['metrics']['cagr']:.2f}% og
-Sharpe fra {m['sharpe']:.2f} til {nofx['metrics']['sharpe']:.2f}.
-
-**Men det er ikke en begrundelse for at fjerne dem.** Argumentet — at valutaer ikke
-har nogen langsigtet drift, så long-only momentum ikke har noget at fange — er
-strukturelt korrekt, men det blev formuleret EFTER vi så tallene. Det er derfor en
-**hypotese til næste kørsel**, ikke en konklusion fra denne. Hovedtallet er alle otte.
-
-Bemærk desuden at FX' bidrag ikke kun er lavt afkast: `ρ_strategi` er stort set
-uændret ({head['rho_bar']:.3f} mod {nofx['rho_bar']:.3f}) når de fjernes. De to
-FX-kryds tilfører altså hverken afkast eller uafhængighed.
-
----
-
-## DEL 4 — baseline
-
-Ligevægtet køb-og-behold af de samme instrumenter, samme periode, samme
-omkostningskonvention (én rundtur pr. instrument over hele perioden). Instrumenter
-der starter senere købes når de findes; kapitalen står i kontanter indtil da —
-ellers skulle baselinen enten forudse hvornår Binance åbnede, eller måles på en
-kortere periode end strategien.
-
-Porteføljen giver **{m['cagr']:.2f}%** mod baselinens **{b['cagr']:.2f}%** — altså
-stort set samme afkast — med **{m['max_drawdown_pct']:.1f}%** mod
-**{b['max_drawdown_pct']:.1f}%** i maksimalt fald og
-**{m['longest_flat_days']}** mod **{b['longest_flat_days']}** dage uden ny top.
-
-Det er samme mønster som i fase 1, nu på porteføljeniveau: TSMOM slår ikke
-køb-og-behold på afkast. Den leverer omtrent samme afkast med under det halve
-drawdown.
-
----
-
-## Lookahead — hvad der er testet
-
-Invers volatilitet beregnet på HELE perioden er den klassiske skjulte fejl her: den
-undervægter systematisk de instrumenter der senere viste sig turbulente, den pynter
-Sharpe, og den efterlader ingen spor i resultatet.
-
-`tests/test_portfolio.py` har tre spærringer, og alle tre er efterprøvet ved at
-indsætte fejlen og se dem køre rødt:
-
-- `test_weights_ignore_all_future_data` — ødelægger alle barer fra
-  rebalanceringsdagen og frem og kræver vægtene uændrede, over 32 månedsskifter.
-- `test_trailing_vol_excludes_the_rebalance_bar_itself` — grænsen er strengt `<`,
-  ikke `<=`. Rebalanceringsdagens egen bar er allerede fremtid.
-- `test_equity_before_a_date_is_unaffected_by_later_data` — hele porteføljen kørt på
-  afkortede serier, kurven skal være identisk på det fælles stykke.
-
-Begge de to realistiske fejl (`<= asof`, og fuldperiode-volatilitet) får testene til
-at fejle.
+Samme mønster som i fase 1, nu på porteføljeniveau: TSMOM slår ikke køb-og-behold på
+afkast. Den leverer lidt mindre afkast med under det halve drawdown og den halve
+ventetid.
 
 ---
 
 ## Hvad kørslen ikke viser
 
-- **Otte instrumenter er ~{head['n_eff_rho']:.1f} væddemål.** Vil man have flere
-  uafhængige kilder, skal de komme fra markeder eller strategityper vi ikke har,
-  ikke fra flere varianter af det samme.
-- **`GC` og `XAU` dobbelttæller guld** (ρ 0,98). Det præregistrerede univers har dem
-  begge, så hovedtallet har dem begge — men et gennemsnit over otte instrumenter
-  hvor to er identiske, vægter guld dobbelt.
-- **Kontanter forrentes stadig ikke.** Porteføljen står uden for markedet
-  {100 - m['time_in_market_pct']:.0f}% af tiden. Ved 2-5% p.a. er det
+- **Syv instrumenter er {head['n_eff_rho']:.1f} væddemål.** Flere uafhængige kilder
+  skal komme fra markeder eller strategityper vi ikke har.
+- **Kontanter forrentes ikke.** Porteføljen står ude {100 - m['time_in_market_pct']:.0f}%
+  af tiden; ved 2-5% p.a. er det
   {(100 - m['time_in_market_pct']) / 100 * 2:.1f}-{(100 - m['time_in_market_pct']) / 100 * 5:.1f}
-  pct-point om året som strategien ikke får krediteret. Testen er konservativ.
-- **Ingen valutaeffekt.** Alt er regnet i USD som om kapitalen var i USD.
-- **Vægtningen er ikke optimeret, og skal ikke være det.** Invers volatilitet er
-  valgt fordi den er parameterfri, ikke fordi den er bedst.
+  pct-point om året strategien ikke får krediteret.
+- **`SPY`s bidrag er delvis en historik-effekt** — den har været med i 33 år, krypto
+  i 9. Bidragskolonnerne er ikke normaliseret for tid i porteføljen.
+- **Vægtningen er ikke optimeret og skal ikke være det.** Invers volatilitet er valgt
+  fordi den er parameterfri.
 
 ---
 
 ## Filer
 
-- `research/portfolio.py` — kombinationsmotoren, vægtning og bogholderi
-- `research/run_portfolio_test.py` — kørslen og de forhåndsregistrerede grænser
-- `tests/test_portfolio.py` — lookahead-spærringerne og gearingsloftet, 8 tests
-- `research/output/portfolio_combination.csv` — begge universer, alle nøgletal
+- `research/portfolio.py` — motoren, `DUPLICATE_UNDERLYING`, bidragsbogholderi
+- `research/run_portfolio_test.py` — kørslen og tabelformatet
+- `tests/test_portfolio.py` — lookahead, gearingsloft, bidragsandele
+- `research/output/portfolio_contributions.csv` — bidrag pr. instrument pr. univers
 """

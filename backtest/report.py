@@ -716,21 +716,22 @@ def format_session_table(rows: list[dict], strategy: str, period: str,
     head = f"BACKTEST  {strategy}  {period}  {configuration}"
     lines = [
         head,
-        f"{'symbol':<10} {'n':>4}  {'WR-brut':>7} {'WR-net':>7}  "
-        f"{'PF-brut':>7} {'PF-net':>7}  {'PnL-brut':>9} {'PnL-net':>9} "
-        f"{'Komp-net':>9} | {'B&H':>9} {'B&H-DD':>8}",
+        # Enheder hører til i overskriften, ikke i cellerne (PF er enhedsløs).
+        f"{'symbol':<10} {'n':>4}  {'WR-brut_%':>9} {'WR-net_%':>9}  "
+        f"{'PF-brut':>7} {'PF-net':>7}  {'PnL-brut_%':>11} {'PnL-net_%':>10} "
+        f"{'Komp-net_%':>11} | {'B&H_%':>9} {'B&H-DD_%':>9}",
     ]
     for r in rows:
         bh = r.get("bh_return_pct")
         bh_dd = r.get("bh_max_dd")
         lines.append(
             f"{r['symbol']:<10} {r['n']:>4}  "
-            f"{r['win_rate']:>6.1f}% {r.get('win_rate_net', r['win_rate']):>6.1f}%  "
+            f"{r['win_rate']:>9.1f} {r.get('win_rate_net', r['win_rate']):>9.1f}  "
             f"{_pf(r['profit_factor']):>7} {_pf(r.get('profit_factor_net')):>7}  "
-            f"{r['total_pnl_pct']:>+8.2f}% {r.get('total_pnl_pct_net', 0.0):>+8.2f}% "
-            f"{r.get('compound_pnl_pct_net', 0.0):>+8.2f}% | "
-            + (f"{bh:>+8.2f}%" if bh is not None else f"{'—':>9}")
-            + (f" {bh_dd:>7.1f}%" if bh_dd is not None else f" {'—':>8}")
+            f"{r['total_pnl_pct']:>+11.2f} {r.get('total_pnl_pct_net', 0.0):>+10.2f} "
+            f"{r.get('compound_pnl_pct_net', 0.0):>+11.2f} | "
+            + (f"{bh:>+9.2f}" if bh is not None else f"{'—':>9}")
+            + (f" {bh_dd:>9.1f}" if bh_dd is not None else f" {'—':>9}")
         )
     lines.append("  PnL = naiv sum af handels-%  ·  Komp = sammensat  ·  "
                  "B&H = køb-og-behold, én rundtur, samme periode")

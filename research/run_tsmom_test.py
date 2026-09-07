@@ -113,14 +113,17 @@ def session_table(rows: list[dict], period: str) -> str:
     """DEL 5 — maks ~15 linjer. Buy-and-hold på SAMME linje, ikke i et separat afsnit."""
     lines = [
         f"FASE 1  time-series momentum ({RULE_LOOKBACK}m, reb. d. {RULE_REBALANCE_DAY})  {period}",
-        f"{'instrument':<11}{'n':>4}{'CAGR':>8}{'maxDD':>8}{'Sharpe':>8}{'flat_dg':>9}"
-        f" | {'B&H CAGR':>9}{'B&H maxDD':>11}",
+        # Enheder i overskriften, ikke i cellerne. flat_år frem for flat_dage:
+        # 1148 dage siger intet, 3,1 år siger med det samme at det er tre år
+        # uden fremgang.
+        f"{'instrument':<11}{'n_pos':>7}{'CAGR_%':>8}{'maxDD_%':>9}{'Sharpe':>8}"
+        f"{'flat_år':>9}{'i_mkt_%':>9} | {'B&H_CAGR_%':>12}{'B&H_maxDD_%':>13}",
     ]
     for r in rows:
         lines.append(
-            f"{r['instrument']:<11}{r['positioner']:>4}{r['cagr']:>7.2f}%{r['maxdd']:>7.1f}%"
-            f"{r['sharpe']:>8.2f}{r['flat_dage']:>9}"
-            f" | {r['bh_cagr']:>8.2f}%{r['bh_maxdd']:>10.1f}%"
+            f"{r['instrument']:<11}{r['positioner']:>7}{r['cagr']:>8.2f}{r['maxdd']:>9.1f}"
+            f"{r['sharpe']:>8.2f}{r['flat_dage'] / 365.25:>9.1f}{r['tid_i_marked_%']:>9.1f}"
+            f" | {r['bh_cagr']:>12.2f}{r['bh_maxdd']:>13.1f}"
         )
     return "\n".join(lines)
 

@@ -54,10 +54,21 @@ from research.daily_series import INSTRUMENTS, Instrument, load
 # lookback — ikke optimeret.
 VOL_MONTHS = 12
 
-# Universerne. ALLE OTTE er det præregistrerede hovedtal.
+# **Ét instrument pr. underliggende aktiv.** XAU er ude: den korrelerede 0,98 med
+# GC i BEGGE matricer — det er samme metal fra to datakilder, ikke to væddemål. Med
+# invers volatilitetsvægtning fik guld dermed dobbelt risikobudget. Det er en
+# konstruktionsfejl, ikke et resultat.
+#
+# GC=F beholdes frem for XAU af DATAKVALITET, ikke afkast: GC kommer fra yfinance
+# som resten (kendt, reproducerbar kilde), roll-effekten er målt til 0,04
+# pct-point/år, og serien dækker 2000-2026. XAU er et ukendt MT4-feed med
+# tick-volumen, validerer kun 2004-2024, og afveg 20% i ATR mod den anden kilde.
+DUPLICATE_UNDERLYING = ("XAU",)
+
 UNIVERSES = {
-    "alle_otte": list(INSTRUMENTS),
-    "uden_fx": [k for k in INSTRUMENTS if k not in ("6E", "6B")],
+    "alle_syv": [k for k in INSTRUMENTS if k not in DUPLICATE_UNDERLYING],
+    "uden_fx": [k for k in INSTRUMENTS
+                if k not in DUPLICATE_UNDERLYING and k not in ("6E", "6B")],
 }
 
 
@@ -125,22 +136,29 @@ def trailing_vol(leg: Leg, asof: pd.Timestamp, months: int = VOL_MONTHS) -> floa
     return float(window.std(ddof=1) * np.sqrt(leg.inst.bars_per_year))
 
 
-def inverse_vol_weights(legs: dict[str, Leg], asof: pd.Timestamp,
-                        months: int = VOL_MONTHS) -> dict[str, float]:
-    """Lige risikobidrag over de legs der har historik nok på ``asof``.
+def weights_and_vols(legs: dict[str, Leg], asof: pd.Timestamp,
+                     months: int = VOL_MONTHS) -> tuple[dict, dict]:
+    """(vægte, volatiliteter) på ``asof``. Volatiliteterne genbruges til risikobidrag.
 
     Ren funktion af data STRENGT før ``asof``. Legs uden brugbart vindue får vægt 0
     frem for at blive gættet på — en manglende volatilitet er ikke en lav volatilitet.
     """
-    inv = {}
+    vols, inv = {}, {}
     for key, leg in legs.items():
         vol = trailing_vol(leg, asof, months)
         if np.isfinite(vol) and vol > 0:
+            vols[key] = vol
             inv[key] = 1.0 / vol
     total = sum(inv.values())
     if total <= 0:
-        return {k: 0.0 for k in legs}
-    return {k: inv.get(k, 0.0) / total for k in legs}
+        return {k: 0.0 for k in legs}, vols
+    return {k: inv.get(k, 0.0) / total for k in legs}, vols
+
+
+def inverse_vol_weights(legs: dict[str, Leg], asof: pd.Timestamp,
+                        months: int = VOL_MONTHS) -> dict[str, float]:
+    """Lige risikobidrag over de legs der har historik nok på ``asof``."""
+    return weights_and_vols(legs, asof, months)[0]
 
 
 @dataclass
@@ -152,6 +170,10 @@ class PortfolioResult:
     benchmark: pd.Series            # ligevægtet buy-and-hold
     turnover_cost_pct: float        # samlede omkostninger i pct af startkapital
     rebalance_cost_share: float     # heraf vægtrebalancering (ikke signalskift)
+    # Bidrag pr. instrument. De to svarer på hvert sit spørgsmål, og et instrument
+    # der leverer 5% af afkastet for 20% af risikoen skal kunne ses med det samme.
+    return_contribution: dict = field(default_factory=dict)   # andel af samlet PnL
+    risk_contribution: dict = field(default_factory=dict)     # andel af vægt × vol
 
 
 def run_portfolio(legs: dict[str, Leg], vol_months: int = VOL_MONTHS) -> PortfolioResult:
@@ -171,10 +193,10 @@ def run_portfolio(legs: dict[str, Leg], vol_months: int = VOL_MONTHS) -> Portfol
     month_first = {}
     for i, p in enumerate(periods):
         month_first.setdefault(p, i)
-    weight_by_period = {
-        p: inverse_vol_weights(legs, master[i], vol_months)
-        for p, i in month_first.items()
-    }
+    computed = {p: weights_and_vols(legs, master[i], vol_months)
+                for p, i in month_first.items()}
+    weight_by_period = {p: w for p, (w, _) in computed.items()}
+    vol_by_period = {p: v for p, (_, v) in computed.items()}
 
     keys = list(legs)
     slot = dict.fromkeys(keys, 0.0)
@@ -184,6 +206,11 @@ def run_portfolio(legs: dict[str, Leg], vol_months: int = VOL_MONTHS) -> Portfol
     live = np.zeros(len(master), dtype=int)
     cost_total = 0.0
     cost_rebalance = 0.0
+    # Bidragsbogholderi. pnl tæller KUN kursbevægelser — rebalanceringens
+    # pengestrømme er flytninger, ikke afkast, og må ikke smitte af.
+    pnl = dict.fromkeys(keys, 0.0)
+    fees = dict.fromkeys(keys, 0.0)
+    risk_sum = dict.fromkeys(keys, 0.0)
 
     aligned = {k: _align(leg, master) for k, leg in legs.items()}
 
@@ -199,7 +226,9 @@ def run_portfolio(legs: dict[str, Leg], vol_months: int = VOL_MONTHS) -> Portfol
 
             # 1) Marker til markedet frem til dagens open (kun hvis pladsen er investeret).
             if slot[key] > 0 and np.isfinite(a["prev_c"][t]) and a["prev_c"][t] > 0:
+                before = slot[key]
                 slot[key] *= a["o"][t] / a["prev_c"][t]
+                pnl[key] += slot[key] - before
 
             # 2) Er dette instrumentets eksekveringsbar for måneden, rebalancér.
             if a["is_exec"][t]:
@@ -215,6 +244,7 @@ def run_portfolio(legs: dict[str, Leg], vol_months: int = VOL_MONTHS) -> Portfol
                 if traded > 0:
                     fee = traded * leg.one_way_cost
                     cost_total += fee
+                    fees[key] += fee
                     # Skiftede signalet ikke, er hele handlen ren vægtrebalancering.
                     if (slot[key] > 0) == bool(a["want"][t]):
                         cost_rebalance += fee
@@ -223,19 +253,40 @@ def run_portfolio(legs: dict[str, Leg], vol_months: int = VOL_MONTHS) -> Portfol
 
             # 3) Resten af dagen: open -> close.
             if slot[key] > 0 and a["o"][t] > 0:
+                before = slot[key]
                 slot[key] *= a["c"][t] / a["o"][t]
+                pnl[key] += slot[key] - before
 
         invested_now = sum(slot.values())
         equity[t] = cash + invested_now
         invested[t] = invested_now / equity[t] if equity[t] > 0 else 0.0
         live[t] = sum(1 for k in keys if weights.get(k, 0.0) > 0)
 
+        # Risikobidrag = FAKTISK vægt × volatilitet, akkumuleret dag for dag.
+        # Den faktiske vægt (og ikke måltvægten) fordi en plads i kontanter bærer
+        # ingen risiko, uanset hvad den var tildelt ved månedsskiftet.
+        if equity[t] > 0:
+            vols = vol_by_period[period]
+            for key in keys:
+                if slot[key] > 0 and key in vols:
+                    risk_sum[key] += slot[key] / equity[t] * vols[key]
+
     eq = pd.Series(equity, index=master)
     # Kurven starter først når mindst ét instrument har kunnet handle.
     first = int(np.argmax(live > 0)) if (live > 0).any() else 0
     eq = eq.iloc[first:] / eq.iloc[first]
 
+    net_pnl = {k: pnl[k] - fees[k] for k in keys}
+    pnl_total = sum(net_pnl.values())
+    risk_total = sum(risk_sum.values())
+
     return PortfolioResult(
+        # Andele kan overstige 100% eller være negative når nogle bidrag er
+        # negative. Det er et rigtigt udsagn om porteføljen og normaliseres ikke væk.
+        return_contribution={k: round(100 * net_pnl[k] / pnl_total, 1)
+                             for k in keys} if abs(pnl_total) > 1e-12 else {},
+        risk_contribution={k: round(100 * risk_sum[k] / risk_total, 1)
+                           for k in keys} if risk_total > 0 else {},
         equity=eq,
         exposure=pd.Series(invested[first:], index=master[first:]),
         weights=pd.DataFrame(weight_by_period).T.sort_index(),

@@ -165,3 +165,48 @@ def test_baseline_is_equal_weight_and_pays_costs():
                                 exec_by_period=leg.exec_by_period, one_way_cost=0.0)
     gratis = portfolio.equal_weight_buy_and_hold(free, res.benchmark.index)
     assert res.benchmark.iloc[-1] < gratis.iloc[-1]   # baselinen er ikke gratis
+
+
+# ---------------------------------------------------------------------------
+# Bidragskolonner (fase 2b)
+# ---------------------------------------------------------------------------
+
+def test_contribution_shares_sum_to_one_hundred():
+    """Bidragene skal dække porteføljen helt — ellers mangler der en post."""
+    legs = {k: _leg(k, seed=i) for i, k in enumerate(("SPY", "GC", "BTC"), start=70)}
+    res = portfolio.run_portfolio(legs)
+    assert sum(res.return_contribution.values()) == pytest.approx(100.0, abs=0.5)
+    assert sum(res.risk_contribution.values()) == pytest.approx(100.0, abs=0.5)
+
+
+def test_return_contribution_excludes_rebalancing_cash_flows():
+    """Et instrument der ALDRIG er long, må bidrage med præcis 0 til afkastet.
+
+    Rebalanceringens pengestrømme flytter kapital ind og ud af pladsen. Talte de
+    med som afkast, ville en plads der kun har stået i kontanter få et bidrag.
+    """
+    dates = pd.bdate_range("2016-01-01", periods=900)
+    falling = 100 * np.cumprod(np.full(900, 0.999))     # aldrig positivt 12m-afkast
+    rising = 100 * np.cumprod(np.full(900, 1.0008))
+
+    from research import tsmom
+    legs = {}
+    for key, close in (("SPY", rising), ("GC", falling)):
+        df = pd.DataFrame({"time": dates, "open": close, "close": close,
+                           "high": close, "low": close, "volume": 1.0})
+        sched = tsmom.build_schedule(df, 12, 1)
+        legs[key] = portfolio.Leg(
+            key=key, inst=INSTRUMENTS[key], dates=pd.DatetimeIndex(dates),
+            open_=close, close=close, pos=tsmom._position_series(df, sched),
+            exec_by_period={r.period: r.exec_idx for r in sched}, one_way_cost=0.0005)
+
+    res = portfolio.run_portfolio(legs)
+    assert res.return_contribution["GC"] == pytest.approx(0.0, abs=1e-9)
+    assert res.risk_contribution["GC"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_duplicate_underlying_is_excluded_from_every_universe():
+    """XAU må ikke kunne snige sig ind i et univers igen ved et uheld."""
+    for keys in portfolio.UNIVERSES.values():
+        assert not set(keys) & set(portfolio.DUPLICATE_UNDERLYING)
+    assert len(portfolio.UNIVERSES["alle_syv"]) == 7

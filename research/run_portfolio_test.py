@@ -36,7 +36,7 @@ OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 
 # --- LÅST FØR KØRSEL ------------------------------------------------------
 # HOVEDTALLET ER ALLE OTTE. Det er det præregistrerede univers.
-HEADLINE_UNIVERSE = "alle_otte"
+HEADLINE_UNIVERSE = "alle_syv"
 
 # Forhåndsregistreret forventning: samlet Sharpe 1,0-1,2.
 EXPECTED_SHARPE = (1.0, 1.2)
@@ -49,7 +49,7 @@ SHARPE_DIVERSIFICATION_FAILS = 0.7
 
 # Delperioder rapporteres, men bedømmelsen sker på HELE perioden. Æraerne er
 # beskrivende — de er valgt af hvornår instrumenterne findes, ikke af resultatet.
-ERAS = {"fra 2003 (≥5 instr.)": "2003-01-01", "fra 2018 (alle 8)": "2018-01-01"}
+ERAS = {"fra 2003 (≥5 instr.)": "2003-01-01", "fra 2018 (alle 7)": "2018-01-01"}
 
 
 def _offdiag_mean(corr: pd.DataFrame) -> float:
@@ -91,15 +91,18 @@ def monthly_returns(config: dict) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     være mindre korrelerede end aktiverne, fordi de er ude af markedet på
     forskellige tidspunkter.
     """
-    strat, asset, sharpes = {}, {}, {}
+    strat, asset, sharpes, standalone = {}, {}, {}, {}
     for key, inst in INSTRUMENTS.items():
         df = load(inst)
         res = tsmom.run_tsmom(df, inst, config, 12, 1)
         strat[key] = res.equity.resample("ME").last().pct_change().dropna()
         asset[key] = (pd.Series(df["close"].to_numpy(), index=pd.DatetimeIndex(df["time"]))
                       .resample("ME").last().pct_change().dropna())
-        sharpes[key] = curve_metrics(res.equity)["sharpe"]
-    return pd.DataFrame(strat), pd.DataFrame(asset), sharpes
+        m = curve_metrics(res.equity, res.exposure, res.positions)
+        b = curve_metrics(res.benchmark)
+        sharpes[key] = m["sharpe"]
+        standalone[key] = {"m": m, "b": b, "positions": res.positions}
+    return pd.DataFrame(strat), pd.DataFrame(asset), sharpes, standalone
 
 
 def evaluate(keys: list[str], config: dict, strat_m: pd.DataFrame,
@@ -131,30 +134,57 @@ def evaluate(keys: list[str], config: dict, strat_m: pd.DataFrame,
     }
 
 
-def session_table(results: dict) -> str:
-    """DEL 4 — baselinen står på SAMME linje, som hidtil."""
+def flat_years(days: int) -> float:
+    """Dage uden ny egenkapitaltop, i år. 1148 dage siger intet; 3,1 år siger
+    med det samme at det er tre år uden fremgang."""
+    return round(days / 365.25, 1)
+
+
+def session_table(name: str, r: dict, standalone: dict) -> str:
+    """Én tabel pr. univers, sorteret efter AFKASTBIDRAG — bedste øverst.
+
+    Enheder står i overskriften, ikke i cellerne. Bidragskolonnerne er dem der
+    svarer på "hvad klarer sig godt": et instrument der leverer 5% af afkastet for
+    20% af risikoen skal kunne ses uden at regne.
+    """
+    res, m, b = r["res"], r["metrics"], r["baseline"]
+    span = f"{res.equity.index[0]:%Y}-{res.equity.index[-1]:%Y}"
     lines = [
-        f"FASE 2  portefølje: invers vol ({VOL_MONTHS}m bagudskuende), månedlig rebalancering",
-        f"{'univers / periode':<24}{'n':>3}{'CAGR':>8}{'maxDD':>8}{'Sharpe':>8}{'flat_dg':>9}"
-        f"{'i mkt':>7} | {'B&H CAGR':>9}{'B&H maxDD':>10}{'B&H Sh':>8}{'B&H flat':>9}",
+        f"FASE 2b  portefølje {name}  {span}  invers vol ({VOL_MONTHS}m bagud), "
+        f"månedlig rebalancering",
+        f"{'instrument':<12}{'CAGR_%':>8}{'maxDD_%':>9}{'Sharpe':>8}{'flat_år':>9}"
+        f"{'i_mkt_%':>9}{'n_pos':>7}{'B&H_CAGR_%':>12}{'B&H_maxDD_%':>13}"
+        f"{'afk_bidrag_%':>14}{'risk_bidrag_%':>15}",
     ]
-    for name, r in results.items():
-        m, b = r["metrics"], r["baseline"]
-        span = f"{r['res'].equity.index[0]:%Y}-{r['res'].equity.index[-1]:%Y}"
+    rows = sorted(r["keys"],
+                  key=lambda k: res.return_contribution.get(k, 0.0), reverse=True)
+    for key in rows:
+        sm, sb = standalone[key]["m"], standalone[key]["b"]
         lines.append(
-            f"{name + '  ' + span:<24}{len(r['keys']):>3}{m['cagr']:>7.2f}%"
-            f"{m['max_drawdown_pct']:>7.1f}%{m['sharpe']:>8.2f}{m['longest_flat_days']:>9}"
-            f"{m['time_in_market_pct']:>6.0f}% | {b['cagr']:>8.2f}%"
-            f"{b['max_drawdown_pct']:>9.1f}%{b['sharpe']:>8.2f}{b['longest_flat_days']:>9}"
+            f"{key:<12}{sm['cagr']:>8.2f}{sm['max_drawdown_pct']:>9.1f}"
+            f"{sm['sharpe']:>8.2f}{flat_years(sm['longest_flat_days']):>9.1f}"
+            f"{sm['time_in_market_pct']:>9.1f}{standalone[key]['positions']:>7}"
+            f"{sb['cagr']:>12.2f}{sb['max_drawdown_pct']:>13.1f}"
+            f"{res.return_contribution.get(key, 0.0):>14.1f}"
+            f"{res.risk_contribution.get(key, 0.0):>15.1f}"
         )
-        for label, (em, eb) in r["eras"].items():
-            lines.append(
-                f"{'  ' + label:<24}{'':>3}{em['cagr']:>7.2f}%"
-                f"{em['max_drawdown_pct']:>7.1f}%{em['sharpe']:>8.2f}{em['longest_flat_days']:>9}"
-                f"{'':>7} | {eb['cagr']:>8.2f}%{eb['max_drawdown_pct']:>9.1f}%"
-                f"{eb['sharpe']:>8.2f}{eb['longest_flat_days']:>9}"
-            )
+    lines.append("-" * 126)
+    lines.append(
+        f"{'PORTEFØLJE':<12}{m['cagr']:>8.2f}{m['max_drawdown_pct']:>9.1f}"
+        f"{m['sharpe']:>8.2f}{flat_years(m['longest_flat_days']):>9.1f}"
+        f"{m['time_in_market_pct']:>9.1f}{'—':>7}"
+        f"{b['cagr']:>12.2f}{b['max_drawdown_pct']:>13.1f}"
+        f"{100.0:>14.1f}{100.0:>15.1f}"
+    )
+    lines.append(
+        f"  instrument-rækkerne er STANDALONE TSMOM; bidragskolonnerne er "
+        f"instrumentets andel i porteføljen"
+    )
     return "\n".join(lines)
+
+
+def all_tables(results: dict, standalone: dict) -> str:
+    return "\n\n".join(session_table(n, r, standalone) for n, r in results.items())
 
 
 def main() -> int:
@@ -162,14 +192,14 @@ def main() -> int:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print("Beregner enkeltinstrument-kurver og månedlige afkast ...")
-    strat_m, asset_m, sharpes = monthly_returns(config)
+    strat_m, asset_m, sharpes, standalone = monthly_returns(config)
 
     results = {}
     for name, keys in UNIVERSES.items():
         print(f"  kombinerer {name} ({len(keys)} instrumenter) ...")
         results[name] = evaluate(keys, config, strat_m, sharpes)
 
-    print("\n" + session_table(results))
+    print("\n" + all_tables(results, standalone))
 
     head = results[HEADLINE_UNIVERSE]
     sharpe = head["metrics"]["sharpe"]
@@ -194,12 +224,18 @@ def main() -> int:
     print(f"  Effektive væddemål: {head['n_eff_rho']:.2f} (ρ) / "
           f"{head['n_eff_eig']:.2f} (egenværdier)")
 
-    _save(results, strat_m, asset_m, sharpes)
+    print("\n  Æraer (hovedtal er hele perioden):")
+    for label, (em, eb) in head["eras"].items():
+        print(f"    {label:<22} CAGR {em['cagr']:>6.2f}%  maxDD {em['max_drawdown_pct']:>6.1f}%"
+              f"  Sharpe {em['sharpe']:>5.2f}  flat {flat_years(em['longest_flat_days']):>4.1f} år"
+              f"  | B&H CAGR {eb['cagr']:>6.2f}%  maxDD {eb['max_drawdown_pct']:>6.1f}%")
+
+    _save(results, strat_m, asset_m, sharpes, standalone)
     print(f"\nRapport -> {OUTPUT_DIR / 'portfolio_combination.md'}")
     return 0
 
 
-def _save(results, strat_m, asset_m, sharpes) -> None:
+def _save(results, strat_m, asset_m, sharpes, standalone) -> None:
     from research.report_portfolio import build
 
     rows = []
@@ -222,8 +258,17 @@ def _save(results, strat_m, asset_m, sharpes) -> None:
             "heraf_vaegtrebalancering_pct": r["res"].rebalance_cost_share,
         })
     pd.DataFrame(rows).to_csv(OUTPUT_DIR / "portfolio_combination.csv", index=False)
+
+    contrib = [
+        {"univers": name, "instrument": k,
+         "afkast_bidrag_%": r["res"].return_contribution.get(k, 0.0),
+         "risiko_bidrag_%": r["res"].risk_contribution.get(k, 0.0)}
+        for name, r in results.items() for k in r["keys"]
+    ]
+    pd.DataFrame(contrib).to_csv(OUTPUT_DIR / "portfolio_contributions.csv", index=False)
+
     (OUTPUT_DIR / "portfolio_combination.md").write_text(
-        build(results, strat_m, asset_m, sharpes, session_table(results),
+        build(results, strat_m, asset_m, sharpes, all_tables(results, standalone),
               n_eff_from_rho, n_eff_from_eigenvalues, _offdiag_mean),
         encoding="utf-8",
     )

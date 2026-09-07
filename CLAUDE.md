@@ -228,6 +228,71 @@ og tesen kan falde mens handlen er i profit. Uden det split kan Loop A ikke skel
   hedder stadig `confidence_gate.py`). Tre modeller har et felt der hedder `confidence` og
   betyder tre forskellige ting — hver har nu en docstring der siger hvilken den ikke er.
 
+## Apparatvalidering + portefølje (fase 1-2, `PRD_FASE1_*` / fase 2-2b)
+
+Fase 1 svarede på om apparatet overhovedet kan finde en effekt der beviseligt findes.
+Det kan det: TSMOM (12m lookback, én parameter) genfindes på `SPY` og `GC=F` med
+markant lavere drawdown end buy-and-hold. **"Ikke påvist" i tidligere kørsler var
+derfor udsagn om strategierne, ikke om målingen.**
+
+### Ét instrument pr. underliggende aktiv i en portefølje
+
+**To tickere for samme ting er ikke diversificering.** `GC=F` og `XAU/USD` korrelerede
+0,98 i BÅDE strategi- og aktivmatricen — samme metal fra to datakilder. Med invers
+volatilitetsvægtning gav det guld dobbelt risikobudget, hvilket er en
+konstruktionsfejl og ikke et resultat. `research/portfolio.DUPLICATE_UNDERLYING`
+holder listen; `XAU` er ude, `GC=F` beholdt af datakvalitet (kendt kilde, målt
+roll-drift 0,04 pct-point/år, dækker 2000-2026) og ikke af afkast.
+
+Rettelsen gjorde tallene en anelse DÅRLIGERE (Sharpe 0,82 → 0,79). Det er pointen:
+duplikatet pyntede resultatet, fordi guld klarede sig godt og korrelerede lavt med
+aktier. En korrektion af konstruktionen skal måles på om den er rigtig, ikke på om
+den hjælper.
+
+### Metrikker for lange horisonter (`backtest/metrics.py`)
+
+- `total_pnl_pct` er en **naiv sum** af handels-procenter — ikke et afkast. Bevaret
+  for eksisterende kaldere, men `compound_pnl_pct` ved siden af er det rigtige tal.
+- `curve_metrics()` regner på en egenkapitalkurve: `cagr`, `max_drawdown_curve`,
+  `sharpe`, `time_in_market_pct`, `longest_flat_days`.
+- **Drawdown måles på daglig mark-to-market**, aldrig ved exit. Måler man
+  strategiens drawdown ved exit og baselinens dagligt, er sammenligningen rigget.
+
+### Buy-and-hold er obligatorisk på hver eneste backtest
+
+`backtest/runner.buy_and_hold_baseline()` køres i BÅDE suite- og enkeltkørslen og
+står på hver linje i sessionstabellen. Baselinen betaler selv **én rundtur** over
+hele perioden — en gratis baseline ville stille strategien gunstigere end
+virkeligheden. En strategi der giver 8% på et aktiv der steg 40%, er ikke god, og
+det kunne vi ikke se før dette.
+
+### Tabelkonventioner — gælder alle fremtidige kørsler
+
+- **Enheder står i overskriften**, ikke i cellerne: `CAGR_%`, `maxDD_%`, `flat_år`,
+  `i_mkt_%`, `B&H_CAGR_%`.
+- **`flat_år` med én decimal, ikke `flat_dage`.** 1148 dage siger intet; 3,1 år
+  siger med det samme at det er tre år uden fremgang.
+- **Porteføljekørsler har bidragskolonner**: andel af samlet afkast og andel af
+  samlet risiko (vægt × volatilitet). Et instrument der leverer −1% af afkastet for
+  10% af risikoen — hvilket er præcis hvad `6E`/`6B` gør — skal kunne ses uden at
+  regne.
+- **Sortér efter afkastbidrag, bedste øverst.** Ikke alfabetisk.
+
+### Lookahead-spærringer er tests, ikke kommentarer
+
+To steder er lookahead nemt og usynligt, og begge er låst med tests der er
+efterprøvet ved at indsætte fejlen og se dem køre rødt:
+
+- **TSMOM-signalet** (`tests/test_tsmom.py`): `ref_idx < signal_idx < exec_idx`.
+  Regner man 12m-afkastet frem til eksekveringsbarens close, er det én bars
+  lookahead — usynligt i resultatet, og hele fase 1 ville være værdiløs.
+- **Porteføljevægtene** (`tests/test_portfolio.py`): volatiliteten måles strengt
+  FØR rebalanceringsdagen. Fuldperiode-vol til vægtning undervægter systematisk de
+  instrumenter der senere viste sig turbulente.
+
+Research-modulerne ligger i `research/` og ikke i `strategies/` — registry'et må
+ikke kunne samle dem op og sende dem i live.
+
 ## Kendte forhold ved den kørende bot
 Fund fra research-kørslerne der handler om **produktionen**, ikke om statistik. De er
 skrevet ned her fordi de overlever de rapporter de kom fra. **Ingen af dem er rettet, og
