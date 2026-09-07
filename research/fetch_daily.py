@@ -19,16 +19,29 @@ import pandas as pd
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "data" / "historical"
 
-# navn -> (kilde, ticker).  Navnet er filnavnet; ticker er kilde-symbolet.
-MARKETS: dict[str, tuple[str, str]] = {
-    "BTCUSDT": ("ccxt", "BTC/USDT"),
-    "ETHUSDT": ("ccxt", "ETH/USDT"),
-    "SOLUSDT": ("ccxt", "SOL/USDT"),
-    "6E": ("yfinance", "6E=F"),
-    "6B": ("yfinance", "6B=F"),
-    "GC": ("yfinance", "GC=F"),
-    "ES": ("yfinance", "ES=F"),
-    "NQ": ("yfinance", "NQ=F"),
+# navn -> (kilde, ticker, adjust).  Navnet er filnavnet; ticker er kilde-symbolet.
+#
+# ``adjust`` er kun relevant for yfinance og betyder auto_adjust: prisen
+# bagudjusteres for splits OG udbytter, så serien bliver totalafkast frem for
+# kursafkast. Futures og krypto betaler intet udbytte, så flaget ville være en
+# no-op der; det står som False for at holde de eksisterende filer bit-identiske.
+#
+# SPY og QQQ hentes JUSTERET, og det er ikke en detalje: DEL 2c gør buy-and-hold
+# til obligatorisk baseline, og buy-and-hold af SPY UDEN udbytte er ikke
+# buy-and-hold af SPY — det er ~1,5%/år for lidt. Fejlen er ikke symmetrisk
+# mellem de to sider: baselinen sidder i markedet 100% af tiden, TSMOM ~70%, så
+# ujusterede kurser ville trække mest fra netop den side strategien skal slå.
+MARKETS: dict[str, tuple[str, str, bool]] = {
+    "BTCUSDT": ("ccxt", "BTC/USDT", False),
+    "ETHUSDT": ("ccxt", "ETH/USDT", False),
+    "SOLUSDT": ("ccxt", "SOL/USDT", False),
+    "6E": ("yfinance", "6E=F", False),
+    "6B": ("yfinance", "6B=F", False),
+    "GC": ("yfinance", "GC=F", False),
+    "ES": ("yfinance", "ES=F", False),
+    "NQ": ("yfinance", "NQ=F", False),
+    "SPY": ("yfinance", "SPY", True),
+    "QQQ": ("yfinance", "QQQ", True),
 }
 
 COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
@@ -60,13 +73,13 @@ def fetch_ccxt(symbol: str) -> pd.DataFrame:
     return df[COLUMNS].astype(float)
 
 
-def fetch_yfinance(ticker: str) -> pd.DataFrame:
-    """Hele den historik Yahoo har for den kontinuerte futures-serie."""
+def fetch_yfinance(ticker: str, adjust: bool = False) -> pd.DataFrame:
+    """Hele den historik Yahoo har for serien. ``adjust`` → totalafkast (se MARKETS)."""
     import yfinance as yf
 
     raw = yf.download(
         ticker, period="max", interval="1d",
-        auto_adjust=False, progress=False, threads=False,
+        auto_adjust=adjust, progress=False, threads=False,
     )
     if raw is None or raw.empty:
         raise RuntimeError(f"yfinance gav intet for {ticker}")
@@ -126,15 +139,17 @@ def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     failures = []
     provenance: dict = {}
-    for name, (source, ticker) in MARKETS.items():
+    for name, (source, ticker, adjust) in MARKETS.items():
         path = OUT_DIR / f"{name}_1d.csv"
         if path.exists():
             print(f"{name}: findes allerede ({path.name}) — springer over")
             continue
-        print(f"{name} <- {source}:{ticker}")
+        print(f"{name} <- {source}:{ticker}{' (justeret)' if adjust else ''}")
         try:
-            df = fetch_ccxt(ticker) if source == "ccxt" else fetch_yfinance(ticker)
-            rep: dict = {"source": source, "ticker": ticker, "raw_bars": len(df)}
+            df = (fetch_ccxt(ticker) if source == "ccxt"
+                  else fetch_yfinance(ticker, adjust=adjust))
+            rep: dict = {"source": source, "ticker": ticker, "raw_bars": len(df),
+                         "auto_adjust": adjust}
             df = clean(df, name, rep)
             if df.empty:
                 raise RuntimeError("tom serie efter rensning")

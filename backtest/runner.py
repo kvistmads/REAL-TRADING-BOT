@@ -38,6 +38,11 @@ logger = logging.getLogger(__name__)
 
 _TF_MS = {"1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
 
+# Barer der bruges til at varme indikatorerne op, før strategien evalueres.
+# Konstant frem for et default-argument alene: buy-and-hold-baselinen skal starte
+# PRÆCIS samme sted som strategien, ellers sammenligner de to forskellige perioder.
+WARMUP = 200
+
 
 def fetch_crypto_ohlcv(symbol: str, timeframe: str, limit: int = 4400) -> pd.DataFrame:
     """
@@ -299,8 +304,32 @@ def simulate_trade(signal, future_df: pd.DataFrame, config: dict,
     }
 
 
+def buy_and_hold_baseline(df: pd.DataFrame, symbol: str, config: dict) -> dict | None:
+    """Obligatorisk baseline: køb-og-behold samme instrument, samme periode.
+
+    **Hver eneste backtest skal rapportere den** (PRD_FASE1 del 2c). En strategi
+    der giver 8% om året på et aktiv der steg 40%, er ikke en god strategi — og
+    uden denne linje kan man ikke se det.
+
+    Vinduet starter ved ``WARMUP``, præcis hvor strategien får lov at handle.
+    Baselinen betaler ÉN rundtur over hele perioden med den samme omkostningsmodel
+    som strategien: en gratis baseline ville stille strategien gunstigere end
+    virkeligheden og gøre sammenligningen utilsigtet rigget.
+    """
+    if df is None or df.empty or len(df) <= WARMUP + 1:
+        return None
+    params = costs_mod._asset_costs(config, symbol)
+    entry = float(df["close"].iloc[WARMUP])
+    spread, slip, _, comm = (costs_mod.cost_fractions(params, entry)
+                             if params else (0.0, 0.0, 0.0, 0.0))
+    return metrics_mod.buy_and_hold_metrics(
+        df["close"].iloc[WARMUP:], df["time"].iloc[WARMUP:],
+        (spread + 2 * slip + comm) * 100,
+    )
+
+
 def run_backtest(df: pd.DataFrame, strategy, symbol: str, config: dict,
-                 warmup: int = 200, flip_exit: bool = False) -> list[dict]:
+                 warmup: int = WARMUP, flip_exit: bool = False) -> list[dict]:
     """Rullende vindue over df; kør strategien og simulér hver trade fremad.
 
     **Backtesten anvender ALDRIG confidence-gaten.** Strategien kaldes med
@@ -451,7 +480,8 @@ def _run_single(args, config) -> int:
     # enkeltkørsler, så formatet er det samme uanset hvordan man kom hertil.
     print()
     print(report.format_session_table(
-        [report.session_row(args.symbol, both)],
+        [report.session_row(args.symbol, both,
+                            buy_and_hold_baseline(df, args.symbol, config))],
         strategy.name,
         f"{meta['from'][:7]}→{meta['to'][:7]}",
         "A2 flip-exit" if args.flip_exit else "A1 baseline",
@@ -520,6 +550,15 @@ def _run_all(config, timeframe: str, flip_exit: bool = False) -> int:
             data[symbol] = None
             print(f" FEJL: {type(e).__name__}: {str(e)[:80]}")
 
+    # Buy-and-hold pr. symbol — obligatorisk baseline (PRD_FASE1 del 2c).
+    # Strategi-uafhængig, så den beregnes én gang og genbruges. Vinduet starter
+    # ved warmup: baselinen skal dække præcis den periode strategien kunne handle i.
+    baselines: dict[str, dict] = {}
+    for symbol, df in data.items():
+        baseline = buy_and_hold_baseline(df, symbol, config)
+        if baseline is not None:
+            baselines[symbol] = baseline
+
     suffix = "_flipexit" if flip_exit else ""
     source_file = f"suite_{date.today().isoformat()}{suffix}.csv"
     rows: list[dict] = []
@@ -577,7 +616,8 @@ def _run_all(config, timeframe: str, flip_exit: bool = False) -> int:
                 "pass_gross": _passes(m),
             })
             session_rows.setdefault(strategy.name, []).append(
-                report.session_row(symbol, {"gross": m, "net": net})
+                report.session_row(symbol, {"gross": m, "net": net},
+                                   baselines.get(symbol))
             )
             # Kun symboler med faktiske data (og dermed en kendt periode) importeres til DB.
             if m["closed_trades"] > 0 and symbol in periods:
@@ -645,6 +685,8 @@ def _total_row(strategy_rows: list[dict], suite_rows: list[dict], strategy: str)
     return {
         "symbol": "TOTAL",
         "n": n,
+        # Ingen B&H paa TOTAL: buy-and-hold af seks forskellige instrumenter er
+        # ikke ét tal, og et gennemsnit ville vaere en opdigtet portefoelje.
         "win_rate": round(100 * wins / n, 1),
         "win_rate_net": round(
             sum(r["win_rate_net"] * r["n"] for r in strategy_rows) / n, 1),
@@ -652,6 +694,9 @@ def _total_row(strategy_rows: list[dict], suite_rows: list[dict], strategy: str)
         "profit_factor_net": _pf("gross_profit_pct_net", "gross_loss_pct_net"),
         "total_pnl_pct": round(sum(r["total_pnl_pct"] for r in strategy_rows), 2),
         "total_pnl_pct_net": round(sum(r["total_pnl_pct_net"] for r in strategy_rows), 2),
+        "compound_pnl_pct_net": round(
+            metrics_mod.compound_return_pct(
+                [r.get("compound_pnl_pct_net", 0.0) for r in strategy_rows]), 2),
     }
 
 

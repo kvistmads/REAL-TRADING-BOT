@@ -97,6 +97,21 @@
     "source": "yfinance",
     "ticker": "NQ=F"
   },
+  "QQQ": {
+    "auto_adjust": true,
+    "bars": 6914,
+    "dropped_high_lt_low": 0,
+    "dropped_incomplete": 1,
+    "dropped_nan": 0,
+    "first": "1999-03-10",
+    "flat_bars_raw": 0,
+    "last": "2026-09-02",
+    "open_eq_close_raw": 52,
+    "raw_bars": 6915,
+    "repairable_bars": 3,
+    "source": "yfinance",
+    "ticker": "QQQ"
+  },
   "SOLUSDT": {
     "bars": 2207,
     "dropped_high_lt_low": 0,
@@ -110,5 +125,20 @@
     "repairable_bars": 0,
     "source": "ccxt",
     "ticker": "SOL/USDT"
+  },
+  "SPY": {
+    "auto_adjust": true,
+    "bars": 8456,
+    "dropped_high_lt_low": 0,
+    "dropped_incomplete": 1,
+    "dropped_nan": 0,
+    "first": "1993-01-29",
+    "flat_bars_raw": 0,
+    "last": "2026-09-02",
+    "open_eq_close_raw": 75,
+    "raw_bars": 8457,
+    "repairable_bars": 27,
+    "source": "yfinance",
+    "ticker": "SPY"
   }
 }
