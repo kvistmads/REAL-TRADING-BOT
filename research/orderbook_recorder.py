@@ -71,6 +71,17 @@ HEARTBEAT = DATA_DIR / "_heartbeat.json"
 # herfra. Det er en reel begrænsning og står i rapporten.
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 
+# To børser, samme symboler, samme kadence, samme format. Formålet er at kunne
+# afgøre "hvilken børs er billigst" med tal frem for mavefornemmelse: MEXC har
+# lavere gebyrer på web-satserne, men tyndere ordrebøger kan æde fordelen. Uden
+# begge sider optaget er det et gæt.
+#
+# Børsen er en PARTITIONSNØGLE og ikke bare en kolonne, så en analyse kan læse
+# den ene uden at røre den anden. Skemaet er udvidet FØR optageren blev sat i
+# drift — havde den kørt i uger først, ville arkivet være delt i to halvdele med
+# forskellig sti-struktur.
+EXCHANGES = ["binance", "mexc"]
+
 DEPTH = 20              # niveauer pr. side
 INTERVAL_SEC = 60       # ét snapshot i minuttet
 FLUSH_MINUTES = 15      # skriv til disk hvert kvarter — små nok filer, få nok skrivninger
@@ -92,27 +103,40 @@ def _setup_logging(verbose: bool = False) -> None:
     logger.setLevel(logging.INFO)
 
 
-def _exchange():
+def _exchange(name: str = "binance"):
     import ccxt
 
-    return ccxt.binance({"enableRateLimit": True})
+    return getattr(ccxt, name)({"enableRateLimit": True})
 
 
-def snapshot(exchange, symbol: str, depth: int = DEPTH) -> dict | None:
+def _exchanges() -> dict:
+    """Én klient pr. børs. Fejler én børs, skal den anden blive ved."""
+    out = {}
+    for name in EXCHANGES:
+        try:
+            out[name] = _exchange(name)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("kunne ikke oprette %s: %s", name, exc)
+    return out
+
+
+def snapshot(exchange, symbol: str, depth: int = DEPTH,
+             venue: str = "binance") -> dict | None:
     """Ét orderbook-snapshot + de seneste handler. None ved fejl (logget)."""
     try:
         book = exchange.fetch_order_book(symbol, limit=depth)
     except Exception as exc:  # noqa: BLE001 — netværksfejl må ikke stoppe optageren
-        logger.warning("orderbook %s: %s: %s", symbol, type(exc).__name__, exc)
+        logger.warning("orderbook %s/%s: %s: %s", venue, symbol, type(exc).__name__, exc)
         return None
 
     bids, asks = book.get("bids") or [], book.get("asks") or []
     if not bids or not asks:
-        logger.warning("orderbook %s: tom bog", symbol)
+        logger.warning("orderbook %s/%s: tom bog", venue, symbol)
         return None
 
     row: dict = {
         "ts": pd.Timestamp.now(tz="UTC").tz_localize(None),
+        "venue": venue,
         "symbol": symbol,
         "bid": float(bids[0][0]), "ask": float(asks[0][0]),
     }
@@ -134,7 +158,7 @@ def snapshot(exchange, symbol: str, depth: int = DEPTH) -> dict | None:
         buys = sum(1 for t in trades if t.get("side") == "buy")
         row["buy_share"] = round(buys / len(trades), 4) if trades else None
     except Exception as exc:  # noqa: BLE001
-        logger.info("trades %s utilgængelige: %s", symbol, type(exc).__name__)
+        logger.info("trades %s/%s utilgængelige: %s", venue, symbol, type(exc).__name__)
         row["last_trade_px"] = None
         row["n_trades_sampled"] = 0
         row["buy_share"] = None
@@ -147,12 +171,13 @@ def _flush(buffer: list[dict]) -> int:
         return 0
     df = pd.DataFrame(buffer)
     written = 0
-    for (day, symbol), group in df.groupby([df["ts"].dt.date, "symbol"]):
-        out_dir = DATA_DIR / f"dt={day}" / f"symbol={symbol.replace('/', '-')}"
+    for (day, venue, symbol), group in df.groupby([df["ts"].dt.date, "venue", "symbol"]):
+        out_dir = (DATA_DIR / f"dt={day}" / f"venue={venue}"
+                   / f"symbol={symbol.replace('/', '-')}")
         out_dir.mkdir(parents=True, exist_ok=True)
         # Ét filnavn pr. kvarter: idempotent hvis processen genstarter midt i.
         stamp = group["ts"].iloc[0].strftime("%H%M")
-        group.drop(columns=["symbol"]).to_parquet(
+        group.drop(columns=["symbol", "venue"]).to_parquet(
             out_dir / f"{stamp}.parquet", index=False, compression="snappy")
         written += len(group)
     return written
@@ -169,7 +194,7 @@ def _write_heartbeat(state: dict) -> None:
 def run(verbose: bool = False) -> int:
     """Hovedløkken. Kører til den bliver stoppet; genstarter sig selv ved fejl."""
     _setup_logging(verbose)
-    exchange = _exchange()
+    clients = _exchanges()
     buffer: list[dict] = []
     state = {"started": datetime.now(timezone.utc), "snapshots_ok": 0,
              "snapshots_failed": 0, "gaps": 0, "last_ok": None, "last_flush": None}
@@ -186,14 +211,15 @@ def run(verbose: bool = False) -> int:
     expected_next = time.time()
     while not stopping["now"]:
         tick_start = time.time()
-        for symbol in SYMBOLS:
-            row = snapshot(exchange, symbol)
-            if row is None:
-                state["snapshots_failed"] += 1
-            else:
-                buffer.append(row)
-                state["snapshots_ok"] += 1
-                state["last_ok"] = row["ts"]
+        for venue, client in clients.items():
+            for symbol in SYMBOLS:
+                row = snapshot(client, symbol, venue=venue)
+                if row is None:
+                    state["snapshots_failed"] += 1
+                else:
+                    buffer.append(row)
+                    state["snapshots_ok"] += 1
+                    state["last_ok"] = row["ts"]
 
         if time.time() - last_flush >= FLUSH_MINUTES * 60 or stopping["now"]:
             try:
@@ -226,9 +252,11 @@ def run(verbose: bool = False) -> int:
     return 0
 
 
-def load(symbol: str | None = None, day: str | None = None) -> pd.DataFrame:
+def load(symbol: str | None = None, day: str | None = None,
+         venue: str | None = None) -> pd.DataFrame:
     """Læs optaget data. Partitioneringen gør det billigt at læse et udsnit."""
-    pattern = f"dt={day or '*'}/symbol={symbol.replace('/', '-') if symbol else '*'}/*.parquet"
+    sym = symbol.replace("/", "-") if symbol else "*"
+    pattern = f"dt={day or '*'}/venue={venue or '*'}/symbol={sym}/*.parquet"
     files = sorted(DATA_DIR.glob(pattern))
     if not files:
         return pd.DataFrame()
@@ -236,6 +264,7 @@ def load(symbol: str | None = None, day: str | None = None) -> pd.DataFrame:
     for f in files:
         d = pd.read_parquet(f)
         d["symbol"] = f.parent.name.split("=", 1)[1].replace("-", "/")
+        d["venue"] = f.parent.parent.name.split("=", 1)[1]
         frames.append(d)
     return pd.concat(frames, ignore_index=True).sort_values("ts")
 
@@ -250,7 +279,7 @@ def coverage() -> tuple[pd.DataFrame, pd.DataFrame]:
     df = load()
     if df.empty:
         return pd.DataFrame(), pd.DataFrame()
-    per_symbol = df["symbol"].nunique()
+    per_symbol = df["symbol"].nunique() * df["venue"].nunique()
     expected_per_hour = 3600 / INTERVAL_SEC * per_symbol
 
     df["dag"] = df["ts"].dt.date
@@ -276,7 +305,7 @@ def estimate_disk(days: int = 1) -> dict:
     import shutil
     import tempfile
 
-    rows_per_day = int(86400 / INTERVAL_SEC) * len(SYMBOLS)
+    rows_per_day = int(86400 / INTERVAL_SEC) * len(SYMBOLS) * len(EXCHANGES)
     rng = pd.Series(range(rows_per_day))
     base = 50_000 + rng * 0.01
     row = {
@@ -300,7 +329,7 @@ def estimate_disk(days: int = 1) -> dict:
         shutil.rmtree(tmp, ignore_errors=True)
 
     return {
-        "symboler": len(SYMBOLS), "niveauer": DEPTH,
+        "børser": len(EXCHANGES), "symboler": len(SYMBOLS), "niveauer": DEPTH,
         "snapshots_pr_døgn": rows_per_day,
         "kolonner": len(df.columns),
         "MB_pr_døgn": round(per_day / 1e6, 2),
@@ -334,11 +363,15 @@ def main() -> int:
 
     if args.once:
         _setup_logging(verbose=True)
-        ex = _exchange()
-        rows = [r for s in SYMBOLS if (r := snapshot(ex, s)) is not None]
+        rows = []
+        for venue, client in _exchanges().items():
+            for sym in SYMBOLS:
+                if (r := snapshot(client, sym, venue=venue)) is not None:
+                    rows.append(r)
         for r in rows:
-            print(f"  {r['symbol']:10} bid {r['bid']:.2f}  ask {r['ask']:.2f}  "
-                  f"spread {r['spread_pct']:.4f}%  handler {r['n_trades_sampled']}")
+            print(f"  {r['venue']:8} {r['symbol']:10} bid {r['bid']:>11.4f}  "
+                  f"ask {r['ask']:>11.4f}  spread {r['spread_pct'] * 100:>7.4f} bp  "
+                  f"handler {r['n_trades_sampled']}")
         print(f"  ({_flush(rows)} rækker skrevet til {DATA_DIR})")
         return 0
 
