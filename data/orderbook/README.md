@@ -9,8 +9,13 @@ selv 1 tick spread og N(0,5; 0,5) ticks slippage som antagelser uden datagrundla
 Parquet, partitioneret pr. dag og symbol:
 
 ```
-data/orderbook/dt=YYYY-MM-DD/symbol=BTC-USDT/HHMM.parquet
+data/orderbook/dt=YYYY-MM-DD/venue=binance/symbol=BTC-USDT/HHMM.parquet
 ```
+
+**Børsen er en partitionsnøgle**, ikke bare en kolonne: en analyse kan læse den ene
+børs uden at røre den anden. Optageren dækker `binance` og `mexc` med samme symboler,
+samme kadence og samme format, så "hvilken børs er billigst" kan afgøres med tal frem
+for mavefornemmelse — MEXC har lavere web-gebyrer, men tyndere bøger kan æde fordelen.
 
 Én række pr. snapshot: `ts`, `bid`, `ask`, `mid`, `spread_pct`, 20 niveauer pr. side
 (`bid_px_0..19`, `bid_sz_0..19`, `ask_px_*`, `ask_sz_*`), plus `last_trade_px`,
@@ -36,9 +41,12 @@ betale. Skriv det med hver gang tallet bruges.
 
 ## Begrænsning 2: kun krypto
 
-yfinance leverer ingen orderbook, så `EUR/USD`, `GBP/USD` og `XAU/USD` kan ikke
-optages herfra. Futures-spread må estimeres (`research/spread_estimators.py`) eller
-måles hos den broker der faktisk handles på.
+ccxt taler kun med kryptobørser, så `EUR/USD`, `GBP/USD` og `XAU/USD` kan ikke optages
+herfra. **Guld er det instrument fase 3 pegede på som mest lovende, og vi kan ikke måle
+dets spread.** Mulighederne — Alpaca-ETF-proxyer, CME-realtid via broker, IBKR paper —
+er undersøgt med priser og forbehold i `research/output/venue_costs.md` (DEL 4b). Ingen
+er implementeret: den billigste kræver kontonøgler vi ikke har, og ville måle `GLD` på
+IEX frem for `GC` på COMEX.
 
 ## Begrænsning 3: maskinen sover
 
@@ -68,8 +76,8 @@ Er `last_ok` gammel, kører optageren ikke. Logs ligger i `_logs/` og roterer ve
 
 ## Diskforbrug
 
-Målt, ikke gættet: **1,7 MB/døgn · 52 MB/måned · 0,62 GB/år** for 3 symboler à 20
-niveauer. Kør `--estimate-disk` for at genberegne hvis symboler eller dybde ændres.
+Målt, ikke gættet: **3,4 MB/døgn · 103 MB/måned · 1,24 GB/år** for 2 børser × 3
+symboler à 20 niveauer. Kør `--estimate-disk` for at genberegne hvis børser, symboler eller dybde ændres.
 
 ## Planlagt validering
 
