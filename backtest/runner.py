@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 # Datakilder
 # ---------------------------------------------------------------------------
 
-_TF_MS = {"1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+_TF_MS = {"5m": 300_000, "15m": 900_000, "1h": 3_600_000,
+          "4h": 14_400_000, "1d": 86_400_000}
 
 # Barer der bruges til at varme indikatorerne op, før strategien evalueres.
 # Konstant frem for et default-argument alene: buy-and-hold-baselinen skal starte
