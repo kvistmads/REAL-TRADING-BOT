@@ -173,29 +173,66 @@ mavefornemmelse. Det er sporets ækvivalent til go/no-go-spørgsmålet på guld.
 
 ---
 
-## 6. Signal og mobil
+## 6. Signal, mobil og infrastruktur
 
-Krav fra Mads, 2026-09-09: præcise signaler hurtigt frem, og mulighed for at handle fra
-telefonen så han ikke er bundet til computeren.
+Besluttet 2026-09-09. Semi-autonom drift er ikke kun et tillidsvalg — den er også den
+sikre vej i forhold til Topstep's personal-device-regel, fordi **ordren afsendes fra
+Macen** uanset hvad. Telefonen sender kun et "ja". Det er ikke anderledes end at ringe
+til en mægler, og det fjerner behovet for at få reglen afklaret hos Topstep.
 
-Det deler systemet i to dele der ikke må blandes sammen:
+### Arkitektur — pilen vender udad
 
-- **Beslutningsdelen** kører på Macen (regel: personal device). Den ser markedet,
-  finder setups, beregner stop og size mod MLL'en.
-- **Formidlingsdelen** skal nå Mads uanset hvor han er, og — i semi-tilstand — tage hans
-  bekræftelse med tilbage.
+Macen skal ikke kunne nås udefra. Den laver kun udgående forbindelser:
 
-Uafklaret: hvilken kanal, hvilken latenstid der er acceptabel, og om bekræftelsen skal
-gå tilbage gennem samme kanal eller udføres i Topstep's egen mobilapp. Et setup på 15m
-har minutter, ikke sekunder — men en push-notifikation der kommer fem minutter for sent
-er værdiløs, og det skal måles frem for antages.
+    Mac finder setup
+      -> sender signal ud via Telegram-bot
+      -> Mads trykker ja på telefonen
+      -> Macen poller efter svaret og lægger ordren
 
-Bemærk: hvis Mads bekræfter fra telefonen, men **ordren afsendes fra Macen**, overholder
-det stadig personal-device-reglen. Sender telefonen selv ordren gennem API'et, er det et
-åbent spørgsmål om det tæller som "your personal device". Det skal afklares hos Topstep
-direkte, ikke gættes.
+Ingen åbne porte, ingen tunnel, ingen router-opsætning, ingen angrebsflade mod den
+maskine der handler. **Telegram er valgt** fordi ét bibliotek klarer begge veje, det
+virker på låseskærmen, og latenstiden er sekunder. Kræver en fallback for det tilfælde
+at Telegram er nede.
 
----
+### Beslutninger
+
+| | |
+|---|---|
+| Kanal | Telegram-bot |
+| Timeout | **Signalet udløber.** Botten gør intet hvis der ikke svares i tide |
+| Svarvindue | 5 minutter (Mads' egen vurdering af hvad han kan holde på vagt) |
+| Uden at spørge: lukke position | **Tilladt** |
+| Uden at spørge: flytte stop/TP | **Tilladt** |
+| Uden at spørge: åbne position | **Ikke tilladt** |
+
+Tilladelserne er asymmetriske med vilje. At lukke en position kan aldrig skabe ny
+eksponering, og en bot der skal bede om lov til at redde kontoen mens telefonen ligger i
+et skab er farligere end en der bare gør det.
+
+### Den skjulte omkostning ved semi-auto — skal måles, ikke antages
+
+Et 15m-setup er gyldigt i minutter. Missede signaler er derfor uundgåelige, og de gør
+**live-resultaterne usammenlignelige med backtesten**: filteret "nåede Mads at svare"
+findes ikke i backtesten. En dårlig måned kunne skyldes strategien eller vagtplanen, og
+vi ville ikke kunne se forskel.
+
+**Krav:** botten logger både hvad den ville have gjort og hvad der faktisk skete —
+samme mønster som `reflection.news.shadow_trader` i det eksisterende repo. Så bliver
+forskellen et tal frem for en usikkerhed. Det bygges ind fra dag ét.
+
+### Infrastruktur
+
+Mønsteret findes færdigt i det eksisterende repo (`com.madskvist.tradingbot.plist`):
+`RunAtLoad` + `KeepAlive` + `ThrottleInterval`. Prop-botten får en kopi hvor kun
+`Label`, stien og logfilerne ændres. Macen kører konstant og starter automatisk igen
+efter nedlukning eller strømafbrydelse.
+
+**Men `KeepAlive` er farligere på en prop-konto end på krypto i dry_run.** Dør botten
+med en åben position og bliver genstartet, må den ikke tro at den står flad. MLL'en
+tæller urealiseret tab i realtid, så en position botten har glemt kan lukke kontoen.
+
+**Krav: tilstandsgenopretning ved opstart.** Botten spørger Topstep "hvad har jeg
+åbent?" før den gør noget som helst andet. Ikke en finesse — en forudsætning.
 
 ## 7. Metoderegler — arvet fra det eksisterende projekt
 
@@ -227,12 +264,21 @@ for at blive rationaliseret.
 
 ## 8. Åbne spørgsmål, i den rækkefølge de skal besvares
 
+Rækkefølgen er ikke bureaukrati. MLL-budgettet bestemmer hvor stor risiko én handel må
+have, hvilket bestemmer stopbredden, hvilket bestemmer hvilken timeframe der overhovedet
+er mulig. Findes der en flot 15m-strategi som bagefter viser sig ikke at kunne sizes
+inden for $2.000, er arbejdet spildt. Spørgsmål 1 **indsnævrer søgefeltet** før
+strategisøgningen begynder — det er en halv times regnestykke, ikke et projekt.
+
 **Før kode:**
 
 1. Positionsstørrelse mod MLL (§5). Hvilken af de fire veje, og med hvilke tal bag.
 2. Topstep's profitmål og Combine-pris pr. kontostørrelse. Ikke verificeret.
 3. Følger markedsdata med API-adgangen, eller er det et separat abonnement?
-4. Tæller en ordre afsendt fra telefonen som "your personal device"? Spørg Topstep.
+4. ~~Tæller en ordre afsendt fra telefonen som "your personal device"?~~ **Bortfaldet.**
+   Semi-designet i §6 sender ordren fra Macen; telefonen sender kun et ja. Spørgsmålet
+   vender først tilbage hvis der senere bygges fuld autonomi med afsendelse fra andet
+   end Macen.
 5. Historik til backtest. `londonstrategicedge.com` har 14 opløsninger inkl. 15m,
    bulk Parquet, gratis nøgle, og en licens der tillader egen research og trading
    kommercielt (ikke videresalg). **Futures-dybden er ikke oplyst** — de nævner aktier
@@ -243,11 +289,15 @@ for at blive rationaliseret.
 
 **Før live:**
 
-7. Macens oppetid. launchd, genstart efter nedbrud, hvad sker der ved netværkstab midt
-   i en åben position.
-8. Slippage på stops, målt.
-9. Hvad gør systemet når MLL'en nærmer sig? Det skal være en eksplicit regel i koden,
-   ikke en konsekvens af at strategien tilfældigvis holder op med at handle.
+7. **Tilstandsgenopretning ved opstart** (§6). Botten skal spørge Topstep hvad der er
+   åbent, før den gør noget andet. Uden den er `KeepAlive` en risiko frem for en
+   sikkerhed.
+8. Netværkstab midt i en åben position. Hvad gør botten, og hvad gør den når
+   forbindelsen kommer tilbage?
+9. Fallback når Telegram er nede.
+10. Slippage på stops, målt.
+11. Hvad gør systemet når MLL'en nærmer sig? Det skal være en eksplicit regel i koden,
+    ikke en konsekvens af at strategien tilfældigvis holder op med at handle.
 
 ---
 
