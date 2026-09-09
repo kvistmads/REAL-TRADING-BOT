@@ -44,7 +44,7 @@ ikke én med et parameter skruet på.
 | Kapital | Udelukkende propfirm-kapital |
 | Firma | Topstep er førstevalg, ikke låst |
 | Mål | Bestå eval, behold funded konto |
-| Autonomi | **Start semi** (bot foreslår, Mads bekræfter), udvid til fuldt autonom bagefter |
+| Autonomi | Backtest og paper-forward **fuldauto**; funded live **semi** (bot foreslår, Mads bekræfter), udvides til fuldt autonom bagefter. Combine-fasen ikke afgjort |
 | Session | US RTH som udgangspunkt; ønske om blanding med døgndrift skal måles først |
 | Instrument | MNQ (mikro Nasdaq) som primært |
 
@@ -194,7 +194,30 @@ maskine der handler. **Telegram er valgt** fordi ét bibliotek klarer begge veje
 virker på låseskærmen, og latenstiden er sekunder. Kræver en fallback for det tilfælde
 at Telegram er nede.
 
-### Beslutninger
+### Bekræftelsesgaten gælder KUN live med rigtige penge
+
+Tilføjet 2026-09-09. **Backtest og paper-forward-test kører fuldautomatisk.** Ingen
+bekræftelse, intet ja eller nej — der skal strategien vise hvad den kan, ubeskåret.
+
+Det er ikke en detalje, det er det der redder målingen. En testfase hvor Mads skal
+bekræfte, måler hans vagtplan lige så meget som strategien. Fuldautomatisk paper-drift
+er derfor **referencen** som alt andet holdes op imod.
+
+Konsekvens, og den er stærkere end shadow-loggen alene: **paper-instansen bliver ved med
+at køre fuldautomatisk parallelt med den semi-automatiske live-instans.** Forskellen
+mellem de to kurver *er* prisen for bekræftelsesgaten — direkte observeret frem for
+estimeret. Det er den samme kode med et flag, så det koster stort set ingenting.
+
+    backtest        fuldauto    strategiens rå egenskaber
+    paper-forward   fuldauto    referencen, kører permanent
+    Combine         ÅBENT       ingen kapital på spil, kun evalueringsgebyret
+    funded live     semi        bekræftelse via Telegram, jf. nedenfor
+
+Combine-fasen er ikke afgjort. Der er ingen kapital på spil ud over gebyret, så
+argumentet for fuldautomatik gælder næsten lige så stærkt som i paper — men det er også
+sidste chance for at opdage at botten gør noget dumt, før den rører rigtige penge.
+
+### Beslutninger for live-fasen
 
 | | |
 |---|---|
@@ -217,8 +240,9 @@ findes ikke i backtesten. En dårlig måned kunne skyldes strategien eller vagtp
 vi ville ikke kunne se forskel.
 
 **Krav:** botten logger både hvad den ville have gjort og hvad der faktisk skete —
-samme mønster som `reflection.news.shadow_trader` i det eksisterende repo. Så bliver
-forskellen et tal frem for en usikkerhed. Det bygges ind fra dag ét.
+samme mønster som `reflection.news.shadow_trader` i det eksisterende repo. Sammen med
+den permanent kørende fuldautomatiske paper-instans betyder det at prisen for
+bekræftelsesgaten er målt to gange og fra to vinkler. Det bygges ind fra dag ét.
 
 ### Infrastruktur
 
