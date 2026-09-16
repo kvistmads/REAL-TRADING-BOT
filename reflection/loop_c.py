@@ -97,7 +97,10 @@ def run_loop_c(
         init_sync_db()
         session_factory = sync_session_maker
     if analyst is None:
-        analyst = ReflectionAnalyst(rcfg["anthropic_model"], store=ObservationStore())
+        # news_intelligence.model vinder over den globale anthropic_model, så
+        # Loop C kan køre Haiku mens nightly kører Opus.
+        ni_model = ni.get("model", rcfg["anthropic_model"])
+        analyst = ReflectionAnalyst(ni_model, store=ObservationStore())
     if reporter is None:
         reporter = TelegramReporter(config)
 

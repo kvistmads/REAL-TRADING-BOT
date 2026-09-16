@@ -135,16 +135,16 @@ notifications:
 reflection:
   enabled: true
   min_trades_for_analysis: 200        # Under dette: observation-only, ingen auto-apply
-  anthropic_model: "claude-opus-4-8"  # Bruges til begge loops
+  anthropic_model: "claude-opus-4-8"  # Bruges til nightly (månedlig) — Opus for dybere analyse
 
   nightly:
-    schedule: "0 2 * * *"             # 02:00 UTC
+    schedule: "0 3 1 * *"            # 1. i måneden kl. 03:00 UTC
     lookback_hours: 24                # Analyser trades/signals fra de seneste N timer
-                                      # (weekly-rapporten dækker den lange historik)
     min_trades_per_strategy: 10       # Spring strategi over hvis for få trades
 
   weekly:
-    schedule: "0 3 * * 0"             # Søndag 03:00 UTC
+    enabled: false                    # Deaktiveret — erstattet af månedlig nightly
+    schedule: "0 3 * * 0"             # Søndag 03:00 UTC (ignoreres når enabled: false)
     include_git_diff: true
     include_profiling: true
 
@@ -168,7 +168,8 @@ reflection:
 
   news_intelligence:                  # Loop C — Phase 4.1
     enabled: true
-    schedule: "0 */2 * * *"           # hver 2. time
+    schedule: "0 6 * * *"            # 06:00 UTC = 08:00 dansk sommertid (én gang dagligt)
+    model: "claude-haiku-4-5-20251001"  # Billig model til daglige news-kald
     horizon_hours: 24                 # evalueringshorisont for shadow signals
     min_confidence: 0.55              # minimum for at gemme shadow signal
     promotion_accuracy: 0.60          # accuracy-grænse for Telegram-alert
