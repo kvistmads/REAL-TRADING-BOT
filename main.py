@@ -49,17 +49,21 @@ def _setup_scheduler(config: dict):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
     from reflection.nightly import run_nightly
-    from reflection.weekly import run_weekly
 
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(
         _run_reflection, "cron", args=[run_nightly, config, "nightly"],
         id="nightly", **parse_cron(reflection["nightly"]["schedule"]),
     )
-    scheduler.add_job(
-        _run_reflection, "cron", args=[run_weekly, config, "weekly"],
-        id="weekly", **parse_cron(reflection["weekly"]["schedule"]),
-    )
+
+    # Weekly-loop: kun tilføjet hvis eksplicit enabled (default: False).
+    # Kør nightly månedligt i stedet for at have to loop med forskellig frekvens.
+    if reflection.get("weekly", {}).get("enabled", False):
+        from reflection.weekly import run_weekly
+        scheduler.add_job(
+            _run_reflection, "cron", args=[run_weekly, config, "weekly"],
+            id="weekly", **parse_cron(reflection["weekly"]["schedule"]),
+        )
 
     news = reflection.get("news_intelligence", {})
     if news.get("enabled", False):
@@ -71,9 +75,11 @@ def _setup_scheduler(config: dict):
         )
 
     scheduler.start()
+    weekly_sched = reflection.get("weekly", {}).get("schedule", "off") \
+        if reflection.get("weekly", {}).get("enabled", False) else "off"
     logger.info(
         "Reflection-scheduler startet: nightly='%s', weekly='%s', news='%s' (UTC).",
-        reflection["nightly"]["schedule"], reflection["weekly"]["schedule"],
+        reflection["nightly"]["schedule"], weekly_sched,
         news.get("schedule", "off") if news.get("enabled") else "off",
     )
     return scheduler
