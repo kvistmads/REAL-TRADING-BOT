@@ -17,6 +17,41 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+def _extract_first_json(text: str) -> str | None:
+    """Udtræk det første komplette JSON-objekt ({}) eller array ([]) fra en streng.
+
+    Bruges når modellen returnerer ekstra tekst efter det afsluttende }  — fx en
+    forklaring på dansk eller endnu et ``` -afsnit. Brace-tælling er mere robust
+    end regex fordi den håndterer nestede strukturer.
+    """
+    for start_char, end_char in (("{", "}"), ("[", "]")):
+        idx = text.find(start_char)
+        if idx == -1:
+            continue
+        depth = 0
+        in_string = False
+        escape = False
+        for i, ch in enumerate(text[idx:], start=idx):
+            if escape:
+                escape = False
+                continue
+            if ch == "\\" and in_string:
+                escape = True
+                continue
+            if ch == '"' and not escape:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == start_char:
+                depth += 1
+            elif ch == end_char:
+                depth -= 1
+                if depth == 0:
+                    return text[idx : i + 1]
+    return None
+
+
 class ReflectionAnalyst:
     def __init__(self, model: str, store=None, client=None):
         """
@@ -89,6 +124,24 @@ class ReflectionAnalyst:
         try:
             data = json.loads(text)
         except json.JSONDecodeError as e:
+            # "Extra data" = modellen returnerede tekst efter JSON-objektet.
+            # Prøv at udtrække det første komplette objekt/array via simpel
+            # brace-tælling frem for regex (håndterer nested strukturer korrekt).
+            extracted = _extract_first_json(text)
+            if extracted is not None:
+                try:
+                    data = json.loads(extracted)
+                except json.JSONDecodeError:
+                    pass
+                else:
+                    # Gennemfør parsing med det udtrukne fragment.
+                    if isinstance(data, dict):
+                        if "observations" in data and isinstance(data["observations"], list):
+                            return data["observations"]
+                        return [data]
+                    if isinstance(data, list):
+                        return data
+                    return []
             logger.error("Kunne ikke parse LLM-JSON: %s | raw=%.300s", e, raw)
             return []
         if isinstance(data, dict):
