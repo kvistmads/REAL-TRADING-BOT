@@ -139,7 +139,8 @@ reflection:
 
   nightly:
     schedule: "0 3 1 * *"            # 1. i måneden kl. 03:00 UTC
-    lookback_hours: 24                # Analyser trades/signals fra de seneste N timer
+    # Analysevinduet følger schedule: fra forrige planlagte kørsel til nu (core/schedule.py).
+    # Månedlig → hele forrige måned. Intet separat lookback-tal at holde i takt.
     min_trades_per_strategy: 10       # Spring strategi over hvis for få trades
 
   weekly:

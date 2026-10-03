@@ -152,7 +152,7 @@ class TestFormattering:
 
     def test_markdown_afsnit(self, temp_db):
         section = format_signal_section(self._stats(temp_db), WIDE_WINDOW_H)
-        assert "## Signal-analyse (seneste 720 timer)" in section
+        assert "## Signal-analyse (seneste 30 dage)" in section
         assert "Total genererede signals: 47" in section
         assert "Passerede gates: 0 (0.0%)" in section
         assert "regime=42, risk=5" in section
@@ -202,8 +202,8 @@ class _NoopAnalyst:
 class TestNightlyIntegration:
     def test_nul_trades_giver_stadig_signal_rapport(self, tmp_path, temp_db, base_config):
         """Kernen i Ændring 10: rapporten genereres selv uden en eneste trade."""
-        # hours_ago=2: base_config er den RIGTIGE config.yaml, og nightly kører
-        # nu på 24 timer — default days_ago=1 ville lande præcis på grænsen.
+        # hours_ago=2: base_config er den RIGTIGE config.yaml. Vinduet følger dens
+        # schedule (core/schedule.py) og ligger altid inden for den seneste periode.
         _seed(temp_db, 10, gate="regime", hours_ago=2)
         reporter = _DummyReporter()
 
@@ -243,7 +243,7 @@ class TestNightlyIntegration:
 
 
 class TestLookbackVindue:
-    """Nightly kører nu på et 24-timers vindue (config: reflection.nightly.lookback_hours).
+    """analyze_signals' vindue i timer. Nightly afleder antallet af schedule (core/schedule.py).
 
     Før så den 30 dage tilbage og rapporterede de samme gamle rækker hver eneste
     nat — 12 signaler fra 11.-12. august blev talt med i seks nætter i træk.

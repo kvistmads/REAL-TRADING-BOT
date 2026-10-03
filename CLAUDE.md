@@ -67,9 +67,13 @@ ingen fejl) — så `--dry-run` virker uden nøgle.
 
 - **Loop A (`nightly.py`)**: analyserer lukkede trades i tre lag, kører hver observation
   gennem `confidence_gate` (guardrails) → `auto_apply` / `telegram_approval` / `report_only`.
-  Vinduet er `reflection.nightly.lookback_hours` (24) — ikke dage. Extractor/signal-analyse
-  tager nu TIMER (`lookback_hours`). Med 30 dage rapporterede den de samme gamle rækker nat
-  efter nat; den lange historik hører til i weekly.
+  Vinduet **følger `reflection.nightly.schedule`**: fra forrige planlagte kørsel til nu
+  (`core/schedule.period_start`). Månedlig schedule → hele forrige måned; daglig → seneste
+  døgn. Intet separat lookback-tal: da nightly gik fra daglig til månedlig (2026-09-16), blev
+  `lookback_hours: 24` stående, og månedsanalysen så kun månedens sidste døgn. Starten er
+  forankret i schedule, ikke i nu — en forsinket kørsel giver overlap, aldrig hul.
+  Extractor/signal-analyse tager stadig TIMER + valgfri `now` (nightly sender samme `now`
+  til alle udtræk).
 - **Loop B (`weekly.py`)**: arkitektur/performance-analyse af kodebasen — auto-applier ALDRIG.
 - Reflection er **synkron** (egen `sync_engine`/`sync_session_maker` i `core/database.py`)
   mod samme SQLite-fil; de to nye tabeller (`observations`, `ab_experiments`) oprettes via
@@ -79,7 +83,10 @@ ingen fejl) — så `--dry-run` virker uden nøgle.
 - Auto-apply skriver til `strategies.params.<strategy_id>.<param>` (eller `strategies.<param>`
   hvis global), tager altid backup `config.yaml.bak.<ts>` + audit til `reflection/audit.log`.
 - Scheduling: APScheduler-cron i `main.py` (kører loops i tråd via `asyncio.to_thread`).
-  NB: cron dag-0 = søndag oversættes til APScheduler-navn i `parse_cron`.
+  NB: cron dag-0 = søndag oversættes til APScheduler-navn i `core/schedule.parse_cron`.
+  Nightly-jobbet har `misfire_grace_time=None`: APScheduler-default er 1 sekund, så et job
+  hvis tidspunkt Mac'en sov igennem, blev sprunget helt over (sket 5× for news-loopet).
+  Kun når processen kører — er botten nede på tidspunktet, er kørslen tabt (memory-jobstore).
 - Bevidste afvigelser fra PRD: profilering kører IKKE `main.py` (uendeligt live-loop) men en
   syntetisk indikator/strategi-hot-path; A/B-armtildeling i execution er ikke wired (hård
   grænse mod live-logik); Telegram-godkendelse via long-polling `getUpdates`, ikke webhook.

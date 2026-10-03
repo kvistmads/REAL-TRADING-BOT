@@ -364,13 +364,8 @@ def test_nightly_runs_on_varied_simulated_trades(tmp_path, temp_db, base_config)
                  hour=9, regime="trending", weeks_spread=3)
     _seed_trades(temp_db, 20, strategy="reversal_context", symbol="ETH/USDT",
                  hour=15, regime="sideways", weeks_spread=3)
-    # Testen handler om uge-aggregeringen/korrelationen, ikke om vinduespolitikken:
-    # produktionens 24-timers lookback ville per definition kun se den nyeste uge.
-    base_config = {**base_config,
-                   "reflection": {**base_config["reflection"],
-                                  "nightly": {**base_config["reflection"]["nightly"],
-                                              "lookback_hours": 8 * 7 * 24}}}
-
+    # Ingen vindues-override nødvendig: den månedlige schedule giver et vindue på
+    # mindst 28 dage, og de seedede trades ligger højst 3 uger tilbage.
     summary = nightly.run_nightly(
         base_config,
         session_factory=temp_db,
@@ -574,3 +569,45 @@ def test_flip_observationer_kan_aldrig_auto_applies(tmp_path, temp_db, base_conf
     assert summary["pending"] == 0
     assert summary["report_only"] == 1
     assert tmp_cfg.read_text() == before
+
+
+# ---------------------------------------------------------------------------
+# Analysevinduet følger schedule
+# ---------------------------------------------------------------------------
+
+def _seed_at(session_factory, ages: list[timedelta]):
+    now = utc_now()
+    with session_factory() as s:
+        for age in ages:
+            s.add(_make_trade(exit_time=now - age))
+        s.commit()
+
+
+@pytest.mark.parametrize(
+    "schedule, inside, outside",
+    [
+        # Månedlig (produktion): vinduet er 28-62 dage — 1 dag inde, 70 dage ude.
+        ("0 3 1 * *", [timedelta(days=1), timedelta(days=20)], [timedelta(days=70)]),
+        # Daglig: vinduet er 24-48 timer — et fast 30-dages tal ville tage alt med.
+        ("0 6 * * *", [timedelta(hours=1)], [timedelta(days=3), timedelta(days=20)]),
+    ],
+    ids=["maanedlig", "daglig"],
+)
+def test_nightly_window_follows_schedule(tmp_path, temp_db, base_config, schedule, inside, outside):
+    """Regression: schedule blev månedlig, lookback_hours blev stående på 24 → månedsanalysen
+    så kun det sidste døgn. Nu afledes vinduet af schedule, så de ikke kan komme ud af trit."""
+    _seed_at(temp_db, inside + outside)
+    config = {**base_config,
+              "reflection": {**base_config["reflection"],
+                             "nightly": {**base_config["reflection"]["nightly"], "schedule": schedule}}}
+    summary = nightly.run_nightly(
+        config,
+        session_factory=temp_db,
+        analyst=_FakeAnalyst([]),
+        store=ObservationStore(client=chromadb.EphemeralClient(), collection_name=f"test_window_{len(inside)}_{len(outside)}"),
+        applier=ParameterApplier(audit_path=str(tmp_path / "audit.log")),
+        reporter=_DummyReporter(),
+        cfg_path=str(tmp_path / "unused.yaml"),
+        dry_run=True,
+    )
+    assert summary["trades_analysed"] == len(inside)
