@@ -173,6 +173,100 @@ handler. Omkostningen skal med i begge tal — det er hele pointen.
 
 ---
 
+## 4b. Succeskriteriet — skal besluttes før første kørsel
+
+Mads' mål, 2026-10-03: **strategien skal slå buy-and-hold.**
+
+Det er en hårdere barre end TSMOM leverede, og det skal siges højt. Fra
+`apparatus_validation.csv`, netto efter omkostninger:
+
+| instrument | år | TSMOM total | B&H total |
+|---|---|---|---|
+| SPY | 32,6 | +2.514% (26,1x) | **+2.735% (28,3x)** |
+| QQQ | 26,4 | **+971% (10,7x)** | +718% (8,2x) |
+| GC | 25,0 | +1.135% (12,4x) | **+1.592% (16,9x)** |
+
+Portefølje, `portfolio_combination.csv`, 33,4 år:
+
+| univers | TSMOM total | B&H total |
+|---|---|---|
+| alle syv | +987% (10,9x) | **+1.230% (13,3x)** |
+| uden FX | **+5.418% (55,2x)** | +1.715% (18,1x) |
+
+**TSMOM slog ikke B&H på afkast.** Den matchede det med halv drawdown. De 55x for
+"uden FX" er drevet af at krypto kom ind i 2018 og eksploderede — og krypto kan ikke
+ligge på en aktiesparekonto. Tallet er ikke opnåeligt i dette design.
+
+### Kriteriet skal vælges NU, ikke efter første resultat
+
+Ellers rationaliserer vi bagefter. Tre muligheder:
+
+```
+A) TOTALAFKAST
+   Slå B&H på slutværdi. Hårdest og mest intuitivt.
+   Risiko: vi forkaster en strategi der virker af andre grunde.
+
+B) RISIKOJUSTERET
+   Slå B&H på Sharpe, eller på CAGR pr. enhed maxDD.
+   Det er dér momentum har sin faktiske evidens.
+   Risiko: et dårligere afkast kan kaldes en sejr.
+
+C) BEGGE SOM TÆRSKEL   <- anbefalet
+   Mindst matche B&H på totalafkast inden for en forhåndsfastsat margin,
+   OG reducere maxDD med mindst en forhåndsfastsat andel.
+   Det er præcis hvad TSMOM faktisk gjorde, og det tvinger begge til at holde.
+```
+
+**Vælges C, skal de to margener tallsættes før kørslen** — fx "inden for 10% af B&H's
+slutværdi" og "maxDD højst 70% af B&H's". Uden tal er det ikke et kriterium.
+
+**IKKE BESLUTTET.** Mads skal vælge.
+
+---
+
+## 4c. Udbytteaktier — idéen, regnestykket, og den version der kan holde
+
+Mads' forslag, 2026-10-03: fokusér på udbytteaktier i de første 1-3 positioner, så
+udbyttet øger afkastet.
+
+**Præmissen holder ikke på denne kontotype, og det er mekanisk — ikke en vurdering.**
+
+Et udbytte er ikke ekstra afkast. Det er en overførsel fra kursen til kontanten:
+udbetaler et selskab 3%, falder kursen tilsvarende. Totalafkastet er uændret. Og
+backtesten brugte allerede **totalafkast** for aktier, altså med udbytter geninvesteret.
+
+På en aktiesparekonto er udbytte desuden aktivt dyrere end kursstigning:
+
+| mekanisme | konsekvens |
+|---|---|
+| Lagerprincippet | 17% af totalafkastet uanset form. Intet skattefortrin ved udbytte |
+| Udenlandsk kildeskat | Nordnet trækker 15% af udenlandske udbytter og kan ikke hjælpe med tilbagebetaling. Op til ~0,45%/år af positionen ved 3% udbytte — **hvis det ikke kan lempes, hvilket er uafklaret** |
+| Kurtage ved geninvestering | 3% af 5.000 kr. er 150 kr. At geninvestere koster 25 kr. = **16,7% af udbyttet** |
+
+Akkumulerende fonde undgår alle tre. De udlodder ikke.
+
+### Men der er en version der kan holde
+
+Vurderet på Mads' egne tre kriterier (hans idéer valideres ikke videnskabeligt):
+
+- **Kan automatiseres?** Ja. Udbytteprocent og udbyttevækst er standarddata.
+- **Passer ind?** Ja — som **rangordnings- eller kvalitetskriterium**, ikke som
+  indkomststrategi. Udbyttevækst bruges bredt som kvalitetsindikator, og
+  udbyttebetalende selskaber har historisk lavere volatilitet. En legitim
+  filterkandidat ved siden af momentum.
+- **Omfang?** Lille. Et ekstra felt i rangordningen, eller et filter før lag 2.
+
+**Og der findes akkumulerende udbytte-ETF'er** — faktoreksponeringen uden kontantdryppet.
+
+### Beslutning
+
+- **Udbytte som indkomst: NEJ** på denne konto. Regnestykket ovenfor.
+- **Udbytte som kvalitetssignal: KANDIDAT.** Skal testes som alt andet — præregistreret
+  kriterium, konfidensinterval, mindste detekterbare forskel beregnet først.
+- **Foretræk akkumulerende share class** hvor den findes.
+
+---
+
 ## 5. Egnethed — hvad der må ligge på kontoen
 
 Dette er den del der skal automatiseres fuldstændigt, fordi fejlen er dyr.
@@ -297,6 +391,8 @@ papirgevinst undervejs. Der skal være kontanter til regningen uden at sælge.
 
 **Før kode:**
 
+0. **Vælg succeskriteriet (§4b).** A, B eller C, og med tal på margenerne.
+   Uden det er ingen kørsel afgørbar.
 1. **Hent og verificér ABIS-filen.** Kolonner, antal rækker, årsopdeling. Skriv en
    parser. Alt andet hviler på den.
 2. **Hvad sker der med en beholdning der falder af listen?** Spørg Skattestyrelsen.
@@ -313,6 +409,7 @@ papirgevinst undervejs. Der skal være kontanter til regningen uden at sælge.
 6. Test 12-0 mod 12-1 til rangordning (§4.1).
 7. Test rang-buffer 2N mod ingen buffer (§4.3).
 8. Mål hvad minimumsstørrelse-asymmetrien koster (§4.2, punkt 3).
+8b. Test udbytte/udbyttevækst som rangordningskriterium (§4c).
 9. Hvordan leveres alerten, og hvad gør den når der ikke er noget at melde?
    Den skal være **stille** når intet skal skifte.
 
@@ -340,6 +437,9 @@ Disse gælder stadig og skal ikke glemmes fordi strategien har fået et nyt lag:
 - **Porteføljens maxDD på −19,0% indtraf i 1998**, da porteføljen bestod af SPY
   alene. Fra 2003 er værste fald −11,7%.
 - **Krypto-tallene var aldrig et strategiresultat** — BTC n=4, ETH n=7.
+- **Uoverensstemmelse fundet 2026-10-03:** `STRATEGI_TSMOM.md` angiver uden-FX'
+  maxDD til −21,1%, mens `portfolio_combination.csv` siger −25,2%. CSV'en er rådata.
+  Rettes i TSMOM-dokumentet.
 - **Dual momentum er ikke testet i vores apparat.** Hverken lagene hver for sig i
   denne form eller kombinationen. Den er dokumenteret i litteraturen; den er ikke
   efterprøvet af os.
