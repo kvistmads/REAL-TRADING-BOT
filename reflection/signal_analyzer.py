@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -45,9 +45,9 @@ def _first_failing_gate(gate_scores: Any) -> str | None:
     return None
 
 
-def analyze_signals(session, lookback_hours: int) -> dict:
-    """Analysér SignalLog for de seneste N TIMER. Kører uanset antal lukkede trades."""
-    cutoff = utc_now() - timedelta(hours=lookback_hours)
+def analyze_signals(session, lookback_hours: float, *, now: datetime | None = None) -> dict:
+    """Analysér SignalLog for de seneste N TIMER (før ``now``). Kører uanset antal lukkede trades."""
+    cutoff = (now or utc_now()) - timedelta(hours=lookback_hours)
     signals = (
         session.execute(select(SignalLog).where(SignalLog.timestamp >= cutoff))
         .scalars()
@@ -86,9 +86,17 @@ def analyze_signals(session, lookback_hours: int) -> dict:
     }
 
 
-def format_signal_section(stats: dict, lookback_hours: int) -> str:
+def format_window(hours: float) -> str:
+    """Vinduets længde til rapporter: timer op til to døgn, derefter hele dage.
+
+    "744 timer" siger intet; "31 dage" siger med det samme at det er en måned.
+    """
+    return f"{round(hours)} timer" if hours < 48 else f"{round(hours / 24)} dage"
+
+
+def format_signal_section(stats: dict, lookback_hours: float) -> str:
     """Markdown-afsnit til nightly-rapporten. Tom analyse → stadig et afsnit."""
-    lines = [f"## Signal-analyse (seneste {lookback_hours} timer)"]
+    lines = [f"## Signal-analyse (seneste {format_window(lookback_hours)})"]
     if not stats or not stats.get("total"):
         lines.append("- Ingen signaler genereret i perioden.")
         return "\n".join(lines)

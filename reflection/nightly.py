@@ -16,6 +16,7 @@ import argparse
 import logging
 import os
 import sys
+from datetime import timedelta
 
 import yaml
 from dotenv import load_dotenv
@@ -24,6 +25,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.database import Observation, init_sync_db, sync_session_maker
+from core.schedule import period_start
 from core.time_utils import utc_now
 from reflection import confidence_gate, extractor
 from reflection.ab_tracker import ABTracker
@@ -31,7 +33,7 @@ from reflection.analyst import ReflectionAnalyst
 from reflection.applier import ParameterApplier
 from reflection.chromadb_store import ObservationStore
 from reflection.research.researcher import Researcher
-from reflection.signal_analyzer import analyze_signals
+from reflection.signal_analyzer import analyze_signals, format_window
 from reflection.strategy_memory import StrategyMemory
 from reflection.reporter import (
     TelegramReporter,
@@ -177,11 +179,11 @@ def _prompt_flip_confidence(strategy_id: str, conf_csv: str, flip_csv: str) -> s
     )
 
 
-def _prompt_layer3(weekly_csv: str, corr_csv: str, shadow_csv: str = "", lookback_hours: int = 24) -> str:
+def _prompt_layer3(weekly_csv: str, corr_csv: str, shadow_csv: str = "", lookback_hours: float = 24) -> str:
     shadow_block = ""
     if shadow_csv:
         shadow_block = (
-            f"\n\n## News Intelligence performance (seneste {lookback_hours} timer):\n"
+            f"\n\n## News Intelligence performance (seneste {format_window(lookback_hours)}):\n"
             f"{shadow_csv}\n\n"
             "Find: Er der perioder hvor news-intelligence havde høj accuracy men vores tekniske "
             "strategier underpræsterede? Det indikerer at news-signalet kunne have haft merværdi."
@@ -271,18 +273,26 @@ def run_nightly(
     report_only: list[dict] = []
     all_obs_for_report: list[dict] = []
 
-    lookback_hours = rcfg["nightly"]["lookback_hours"]
+    # Vinduet er perioden siden forrige planlagte kørsel (core/schedule.py): månedlig
+    # schedule → hele forrige måned. Alle udtræk bruger samme `now`, så starten
+    # rammer præcis — også shadow-udtrækket, der først sker efter flere LLM-kald.
+    now = utc_now()
+    since = period_start(rcfg["nightly"]["schedule"], now)
+    lookback_hours = (now - since) / timedelta(hours=1)
+    logger.info("Nightly: analysevindue %s → %s UTC (%s).",
+                since.strftime("%Y-%m-%d %H:%M"), now.strftime("%Y-%m-%d %H:%M"),
+                format_window(lookback_hours))
     signal_stats: dict = {"total": 0}
 
     with session_factory() as session:
         total_trades = extractor.count_closed_trades(session)
-        df = extractor.extract_closed_trades(session, lookback_hours)
+        df = extractor.extract_closed_trades(session, lookback_hours, now=now)
         logger.info("Nightly: %d lukkede trades i lookback, %d totalt.", len(df), total_trades)
 
         # Signal-analysen kører UANSET om der er lukkede trades: med 0 trades er
         # SignalLog det eneste sted der står hvad botten ville have handlet.
         try:
-            signal_stats = analyze_signals(session, lookback_hours)
+            signal_stats = analyze_signals(session, lookback_hours, now=now)
             logger.info("Nightly: %d signals i lookback (%d passerede).",
                         signal_stats.get("total", 0), signal_stats.get("passed", 0))
         except Exception as e:  # signal-analysen må aldrig vælte nightly
@@ -330,12 +340,11 @@ def run_nightly(
             # Lag 3 — portefølje (beriget med news-intelligence-performance)
             weekly = extractor.weekly_pnl_by_strategy(df)
             corr = extractor.strategy_correlation(weekly)
-            lookback = rcfg["nightly"]["lookback_hours"]
-            shadow_df = extractor.extract_shadow_signal_performance(session, lookback)
+            shadow_df = extractor.extract_shadow_signal_performance(session, lookback_hours, now=now)
             shadow_csv = shadow_df.to_csv(index=False) if not shadow_df.empty else ""
             if not weekly.empty:
                 raw_observations += analyst.analyse(
-                    _prompt_layer3(weekly.to_csv(), corr.to_csv(), shadow_csv, lookback),
+                    _prompt_layer3(weekly.to_csv(), corr.to_csv(), shadow_csv, lookback_hours),
                     "portefølje meta-analyse",
                 )
 

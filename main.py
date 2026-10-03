@@ -6,6 +6,7 @@ import yaml
 from dotenv import load_dotenv
 
 from core.engine import TradingEngine
+from core.schedule import parse_cron
 
 logging.basicConfig(
     level=logging.INFO,
@@ -14,23 +15,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-
-# Cron day-of-week: 0/7 = søndag. APScheduler bruger 0 = mandag → oversæt til navne.
-_CRON_DOW = {"0": "sun", "7": "sun", "1": "mon", "2": "tue", "3": "wed",
-             "4": "thu", "5": "fri", "6": "sat"}
-
-
-def parse_cron(expr: str) -> dict:
-    """'m h dom mon dow' (standard cron) → kwargs til APScheduler CronTrigger."""
-    minute, hour, dom, month, dow = expr.split()
-    return {
-        "minute": minute,
-        "hour": hour,
-        "day": dom,
-        "month": month,
-        "day_of_week": _CRON_DOW.get(dow, dow),
-    }
-
 
 async def _run_reflection(entry, config: dict, label: str) -> None:
     """Kør en (synkron) reflection-loop i en tråd, så event-loopet ikke blokeres."""
@@ -54,6 +38,11 @@ def _setup_scheduler(config: dict):
     scheduler.add_job(
         _run_reflection, "cron", args=[run_nightly, config, "nightly"],
         id="nightly", **parse_cron(reflection["nightly"]["schedule"]),
+        # APScheduler-default er 1 sekunds grace: sov Mac'en kl. 03:00 UTC den 1.,
+        # blev hele månedsanalysen sprunget over til næste måned. None = kør så
+        # snart processen vågner. Vinduet er forankret i schedule (core/schedule.py),
+        # så en forsinket kørsel analyserer stadig hele perioden.
+        misfire_grace_time=None,
     )
 
     # Weekly-loop: kun tilføjet hvis eksplicit enabled (default: False).
