@@ -100,7 +100,9 @@ def run_loop_c(
         # news_intelligence.model vinder over den globale anthropic_model, så
         # Loop C kan køre Haiku mens nightly kører Opus.
         ni_model = ni.get("model", rcfg["anthropic_model"])
-        analyst = ReflectionAnalyst(ni_model, store=ObservationStore())
+        analyst = ReflectionAnalyst(
+            ni_model, store=ObservationStore(), schema=shadow_trader.NEWS_PREDICTION_SCHEMA
+        )
     if reporter is None:
         reporter = TelegramReporter(config)
 

@@ -21,16 +21,14 @@ Du er en kvantitativ makro-analytiker. Nedenfor er de seneste nyhedsoverskrifter
 Vurdér den sandsynlige prisretning for {symbol} over de næste {horizon} timer baseret KUN på disse nyheder.
 Ignorer alt hvad du ved om den nuværende tekniske situation.
 
-Svar KUN med JSON:
-{{
-  "symbol": "{symbol}",
-  "predicted_direction": "up" | "down" | "neutral",
-  "confidence": float (0.0-1.0),
-  "horizon_hours": {horizon},
-  "reasoning": "...",
-  "sentiment_scores": {{"positive": float, "negative": float, "neutral": float}},
-  "key_headlines": ["...", "..."]
-}}
+Returnér én forudsigelse:
+- symbol: "{symbol}"
+- predicted_direction: "up", "down" eller "neutral"
+- confidence: 0.0-1.0
+- horizon_hours: {horizon}
+- reasoning: kort begrundelse
+- sentiment_scores: positive/negative/neutral, hver 0.0-1.0
+- key_headlines: de overskrifter der vejede tungest
 
 Brug "neutral" hvis nyheder er modstridende eller ikke retningsgivende.
 Confidence under {min_conf} → brug altid "neutral" (ingen halvhjertet forudsigelse).
@@ -38,6 +36,35 @@ Confidence under {min_conf} → brug altid "neutral" (ingen halvhjertet forudsig
 HEADLINES ({symbol}, seneste 4 timer):
 {headlines}
 """
+
+
+# Skema for ét svar-element (structured outputs). loop_c giver det til sin analyst.
+NEWS_PREDICTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "symbol": {"type": "string"},
+        "predicted_direction": {"type": "string", "enum": ["up", "down", "neutral"]},
+        "confidence": {"type": "number"},
+        "horizon_hours": {"type": "integer"},
+        "reasoning": {"type": "string"},
+        "sentiment_scores": {
+            "type": "object",
+            "properties": {
+                "positive": {"type": "number"},
+                "negative": {"type": "number"},
+                "neutral": {"type": "number"},
+            },
+            "required": ["positive", "negative", "neutral"],
+            "additionalProperties": False,
+        },
+        "key_headlines": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "symbol", "predicted_direction", "confidence", "horizon_hours",
+        "reasoning", "sentiment_scores", "key_headlines",
+    ],
+    "additionalProperties": False,
+}
 
 
 def _build_prompt(symbol: str, headlines: list[dict], horizon_hours: int, min_confidence: float) -> str:

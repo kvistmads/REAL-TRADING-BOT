@@ -193,12 +193,34 @@ _ARCH_PROMPT = (
     "5. SAMMENHÆNG: inkonsistenser mellem hvad strategierne lover og hvad execution leverer?\n\n"
     "For hvert fund: estimer impact (high/medium/low) og effort (hours 1-8). Prioritér efter "
     "impact/effort.\n\n"
-    "Svar KUN med JSON-array:\n"
-    '[{"type":"architecture_suggestion","category":"performance|architecture|reliability|'
-    'testing|consistency","file":"path/til/fil.py","description":"...","suggested_change":"...",'
-    '"impact":"high|medium|low","effort_hours":0,"confidence":0.0}]\n\n'
+    "For hvert fund: category, file (sti til filen), description, suggested_change, "
+    "impact, effort_hours og confidence (0.0-1.0).\n\n"
     "SNAPSHOT:\n"
 )
+
+
+# Skema for ét arkitekturfund (structured outputs). Felterne er dem reporter.py læser.
+ARCH_FINDING_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "type": {"type": "string", "enum": ["architecture_suggestion"]},
+        "category": {
+            "type": "string",
+            "enum": ["performance", "architecture", "reliability", "testing", "consistency"],
+        },
+        "file": {"type": "string"},
+        "description": {"type": "string"},
+        "suggested_change": {"type": "string"},
+        "impact": {"type": "string", "enum": ["high", "medium", "low"]},
+        "effort_hours": {"type": "number"},
+        "confidence": {"type": "number"},
+    },
+    "required": [
+        "type", "category", "file", "description", "suggested_change",
+        "impact", "effort_hours", "confidence",
+    ],
+    "additionalProperties": False,
+}
 
 
 def run_weekly(config: dict, dry_run: bool = False) -> dict:
@@ -214,7 +236,7 @@ def run_weekly(config: dict, dry_run: bool = False) -> dict:
     include_git_diff = wcfg.get("include_git_diff", True)
 
     snapshot = collect_codebase_snapshot(include_profiling, include_git_diff)
-    analyst = ReflectionAnalyst(rcfg["anthropic_model"], store=None)
+    analyst = ReflectionAnalyst(rcfg["anthropic_model"], store=None, schema=ARCH_FINDING_SCHEMA)
 
     prompt = _ARCH_PROMPT + json.dumps(snapshot, default=str)[:60000]
     findings = analyst.analyse(prompt, context_text="")
