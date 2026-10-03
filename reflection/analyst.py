@@ -1,10 +1,14 @@
-"""Anthropic-klient: bygger prompts, kalder LLM, parser JSON-svar til observationer.
+"""Anthropic-klient: kalder LLM'en og returnerer svaret som en liste af dicts.
 
 Robusthed:
 - Uden ANTHROPIC_API_KEY kører analysten *offline*: den kalder ikke API'et og
   returnerer [] (tom liste). Så kan nightly/weekly --dry-run køre uden nøgle/uden fejl.
-- LLM'en instrueres til at svare med et rent JSON-array. Vi stripper markdown-fences
-  og tåler at svaret pakkes i et objekt eller er tomt.
+- Svaret er låst til et JSON-skema via structured outputs (``output_config.format``):
+  API'et garanterer gyldig JSON der matcher skemaet. Før forsøgte vi at liste JSON ud
+  af fritekst. Det fejlede enten højlydt (modellen svarede i markdown-prosa) eller
+  tavst (efter et array med efterfølgende tekst blev kun det første objekt beholdt).
+- Hver instans har ét skema, fordi hver kalder beder om én slags svar: nightly om
+  observationer (default), Loop C om en nyhedsforudsigelse, weekly om arkitekturfund.
 """
 
 from __future__ import annotations
@@ -12,57 +16,82 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Structured outputs kræver additionalProperties: false på alle objekter og
+# understøtter ikke minimum/maximum — intervaller (fx confidence 0-1) står i prompten.
+_NULLABLE_STRING = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+_NULLABLE_NUMBER = {"anyOf": [{"type": "number"}, {"type": "null"}]}
+_PARAM_VALUE = {
+    "anyOf": [{"type": "number"}, {"type": "string"}, {"type": "boolean"}, {"type": "null"}]
+}
 
-def _extract_first_json(text: str) -> str | None:
-    """Udtræk det første komplette JSON-objekt ({}) eller array ([]) fra en streng.
+OBSERVATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "strategy_id": _NULLABLE_STRING,  # null for portefølje-observationer (lag 3)
+        "type": {
+            "type": "string",
+            "enum": [
+                "parameter_suggestion",
+                "regime_correlation",
+                "temporal_drift",
+                "symbol_filter",
+                "observation",
+                "portfolio_pattern",
+                "correlation_warning",
+                "diversification_gap",
+            ],
+        },
+        "parameter": _NULLABLE_STRING,
+        "current_value": _PARAM_VALUE,
+        "suggested_value": _PARAM_VALUE,
+        "evidence": {
+            "type": "object",
+            "properties": {
+                "win_above": _NULLABLE_NUMBER,
+                "win_below": _NULLABLE_NUMBER,
+                "n": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+                "threshold": _NULLABLE_NUMBER,
+            },
+            "required": ["win_above", "win_below", "n", "threshold"],
+            "additionalProperties": False,
+        },
+        "confidence": {"type": "number"},
+        "reasoning": {"type": "string"},
+    },
+    "required": [
+        "strategy_id", "type", "parameter", "current_value", "suggested_value",
+        "evidence", "confidence", "reasoning",
+    ],
+    "additionalProperties": False,
+}
 
-    Bruges når modellen returnerer ekstra tekst efter det afsluttende }  — fx en
-    forklaring på dansk eller endnu et ``` -afsnit. Brace-tælling er mere robust
-    end regex fordi den håndterer nestede strukturer.
-    """
-    for start_char, end_char in (("{", "}"), ("[", "]")):
-        idx = text.find(start_char)
-        if idx == -1:
-            continue
-        depth = 0
-        in_string = False
-        escape = False
-        for i, ch in enumerate(text[idx:], start=idx):
-            if escape:
-                escape = False
-                continue
-            if ch == "\\" and in_string:
-                escape = True
-                continue
-            if ch == '"' and not escape:
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if ch == start_char:
-                depth += 1
-            elif ch == end_char:
-                depth -= 1
-                if depth == 0:
-                    return text[idx : i + 1]
-    return None
+
+def _response_schema(item_schema: dict) -> dict:
+    """Pak item-skemaet i et objekt med en liste — en tom liste er et gyldigt svar."""
+    return {
+        "type": "object",
+        "properties": {"results": {"type": "array", "items": item_schema}},
+        "required": ["results"],
+        "additionalProperties": False,
+    }
 
 
 class ReflectionAnalyst:
-    def __init__(self, model: str, store=None, client=None):
+    def __init__(self, model: str, store=None, client=None, schema: dict = OBSERVATION_SCHEMA):
         """
-        model: fx "claude-opus-4-8".
+        model: fx "claude-opus-5-5".
         store: valgfri ObservationStore til at berige prompten med historik.
         client: injicér en færdig anthropic-klient (bruges i tests). Hvis None
                 oprettes en rigtig klient — men kun hvis ANTHROPIC_API_KEY findes.
+        schema: JSON-skema for ÉT element i svaret. Default er nightly-observationer.
         """
         self.model = model
         self.store = store
         self.client = client
+        self.schema = schema
         self.offline = False
 
         if self.client is None:
@@ -78,9 +107,9 @@ class ReflectionAnalyst:
                 self.client = anthropic.Anthropic()
 
     def analyse(self, prompt: str, context_text: str = "") -> list[dict]:
-        """Kald LLM med prompt + evt. historik-kontekst. Returnér liste af observationer.
+        """Kald LLM med prompt + evt. historik-kontekst. Returnér listen af resultater.
 
-        Kaster aldrig videre: fejl (netværk, parse) logges og giver [].
+        Kaster aldrig videre: fejl (netværk, API, afkortet svar) logges og giver [].
         """
         if self.offline or self.client is None:
             return []
@@ -98,60 +127,34 @@ class ReflectionAnalyst:
         try:
             message = self.client.messages.create(
                 model=self.model,
-                max_tokens=4096,
+                # Thinking-tokens tæller med i max_tokens på modeller hvor thinking
+                # altid er slået til (Opus 5.5). 4096 kunne afkorte selve svaret.
+                max_tokens=16000,
                 messages=[{"role": "user", "content": content}],
+                output_config={
+                    "format": {"type": "json_schema", "schema": _response_schema(self.schema)}
+                },
             )
-            raw = message.content[0].text.strip()
         except Exception as e:
             logger.error("Anthropic-kald fejlede: %s", e)
             return []
 
-        return self._parse(raw)
+        return self._results(message)
 
     @staticmethod
-    def _parse(raw: str) -> list[dict]:
-        """Parse LLM-output til en liste af dicts. Tolerant over for fences/wrapping."""
-        if not raw:
+    def _results(message) -> list[dict]:
+        # Ved refusal eller max_tokens matcher svaret ikke nødvendigvis skemaet.
+        if message.stop_reason in ("refusal", "max_tokens"):
+            logger.error("LLM-svar ufuldstændigt (stop_reason=%s) — ingen resultater.", message.stop_reason)
             return []
-        text = raw.strip()
-        # Strip markdown code-fences (```json ... ```).
-        if text.startswith("```"):
-            lines = text.split("\n")
-            lines = lines[1:]  # drop åbnings-fence (evt. ```json)
-            if lines and lines[-1].strip().startswith("```"):
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
+        # Modeller med thinking lægger en thinking-blok FØR tekst-blokken,
+        # så content[0] er ikke nødvendigvis svaret.
+        text = next((b.text for b in message.content if b.type == "text"), "")
         try:
-            data = json.loads(text)
-        except json.JSONDecodeError as e:
-            # "Extra data" = modellen returnerede tekst efter JSON-objektet.
-            # Prøv at udtrække det første komplette objekt/array via simpel
-            # brace-tælling frem for regex (håndterer nested strukturer korrekt).
-            extracted = _extract_first_json(text)
-            if extracted is not None:
-                try:
-                    data = json.loads(extracted)
-                except json.JSONDecodeError:
-                    pass
-                else:
-                    # Gennemfør parsing med det udtrukne fragment.
-                    if isinstance(data, dict):
-                        if "observations" in data and isinstance(data["observations"], list):
-                            return data["observations"]
-                        return [data]
-                    if isinstance(data, list):
-                        return data
-                    return []
-            logger.error("Kunne ikke parse LLM-JSON: %s | raw=%.300s", e, raw)
+            return json.loads(text)["results"]
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.error("Uventet LLM-svar trods skema: %s | raw=%.300s", e, text)
             return []
-        if isinstance(data, dict):
-            # Tillad {"observations": [...]} eller en enkelt observation.
-            if "observations" in data and isinstance(data["observations"], list):
-                return data["observations"]
-            return [data]
-        if isinstance(data, list):
-            return data
-        return []
 
     @staticmethod
     def _format_history(similar: list[dict]) -> str:

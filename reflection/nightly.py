@@ -46,6 +46,12 @@ logger = logging.getLogger(__name__)
 # Prompt-byggere (tre-lags cascading analyse)
 # ---------------------------------------------------------------------------
 
+# Skemaet tvinger svaret i form, men må ikke tvinge et fund frem. Uden denne linje
+# kan modellen kun vælge mellem at opfinde observationer og at returnere en tom
+# liste uden at vide at det sidste er tilladt.
+_EMPTY_OK = "Bærer datagrundlaget ingen konklusion, så returnér en tom liste — opfind ikke fund."
+
+
 def _prompt_layer1(
     strategy_id: str, sub, meta_cols: list[str], memory_ctx: str = "", research_ctx: str = ""
 ) -> str:
@@ -82,11 +88,11 @@ def _prompt_layer1(
         f"Se særligt på: {keys}.\n"
         f"{memory_block}"
         f"{research_block}\n"
-        "Svar KUN med et JSON-array af observationer i formatet:\n"
-        '[{"strategy_id":"...","type":"parameter_suggestion","parameter":"...",'
-        '"current_value":...,"suggested_value":...,'
-        '"evidence":{"win_above":0.0,"win_below":0.0,"n":0,"threshold":0.0},'
-        '"confidence":0.0,"reasoning":"..."}]\n\n'
+        "Hver observation er et parameterforslag (type \"parameter_suggestion\"): "
+        "parameter, current_value, suggested_value, evidence (win_above/win_below = "
+        "win-rate over/under tærsklen, n = antal trades, threshold = tærsklen), "
+        "confidence (0.0-1.0) og reasoning.\n"
+        f"{_EMPTY_OK}\n\n"
         f"TRADES:\n{csv}"
     )
 
@@ -135,8 +141,8 @@ def _prompt_layer2(strategy_id: str, agg_csv: str) -> str:
         "sessioner og regime-kontekster.\n"
         "Find: (1) hvilke symboler/sessioner/regimer der over/underperformer, (2) temporal "
         "drift, (3) regime-korrelationer der forudsiger tab bedre end regime-gaten i dag.\n\n"
-        'Svar i samme JSON-format. Tilladt type: "regime_correlation" | "temporal_drift" | '
-        '"symbol_filter".\n\n'
+        'Brug type "regime_correlation", "temporal_drift" eller "symbol_filter".\n'
+        f"{_EMPTY_OK}\n\n"
         f"AGGREGEREDE DATA (symbol × session × regime):\n{agg_csv}"
     )
 
@@ -164,7 +170,8 @@ def _prompt_flip_confidence(strategy_id: str, conf_csv: str, flip_csv: str) -> s
         "Rapportér hvad tallene viser, med eksplicit forbehold for stikprøvestørrelsen "
         "(n pr. gruppe står i tabellerne). Konkludér 'kan ikke afgøres' frem for "
         "'virker ikke' når n er lille.\n\n"
-        'Svar i samme JSON-format. Tilladt type: "observation".\n\n'
+        'Brug type "observation".\n'
+        f"{_EMPTY_OK}\n\n"
         f"CONFIDENCE-KVARTILER:\n{conf_csv}\n\n"
         f"FLIP LEVEL:\n{flip_csv}"
     )
@@ -183,7 +190,9 @@ def _prompt_layer3(weekly_csv: str, corr_csv: str, shadow_csv: str = "", lookbac
         "Nedenfor er de tre strategiers ugentlige pnl og deres korrelationsmatrix.\n"
         "Find: (1) perioder hvor alle taber samtidig (systemisk fejl), (2) om strategierne "
         "reelt er ukorrelerede, (3) om porteføljen giver reel diversifikation.\n\n"
-        'Svar med type: "portfolio_pattern" | "correlation_warning" | "diversification_gap".\n\n'
+        'Brug type "portfolio_pattern", "correlation_warning" eller "diversification_gap" '
+        "og strategy_id null.\n"
+        f"{_EMPTY_OK}\n\n"
         f"UGENTLIG PNL PR. STRATEGI:\n{weekly_csv}\n\nKORRELATIONSMATRIX:\n{corr_csv}"
         f"{shadow_block}"
     )
